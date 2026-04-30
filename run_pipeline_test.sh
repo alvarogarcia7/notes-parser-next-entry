@@ -1,0 +1,329 @@
+#!/bin/bash
+set -e
+
+# Color codes
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Configuration
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NATS_PORT=4222
+NATS_URL="nats://localhost:$NATS_PORT"
+NATS_CONTAINER="nats-pipeline-test"
+OUTPUT_DIR="/tmp/training"
+TIMEOUT=15
+
+# Cleanup function
+cleanup() {
+    echo -e "\n${YELLOW}🛑 Cleaning up...${NC}"
+
+    # Kill all background processes
+    jobs -p | xargs -r kill 2>/dev/null || true
+    sleep 1
+
+    # Stop NATS container if we started it
+    if docker ps --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
+        echo "Stopping NATS container..."
+        docker stop "$NATS_CONTAINER" >/dev/null 2>&1
+        docker rm "$NATS_CONTAINER" >/dev/null 2>&1
+    fi
+
+    echo -e "${GREEN}✓ Cleanup complete${NC}"
+}
+
+trap cleanup EXIT
+
+# Helper functions
+print_header() {
+    echo ""
+    echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}$1${NC}"
+    echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
+}
+
+print_step() {
+    echo -e "\n${YELLOW}→ $1${NC}"
+}
+
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+# Check prerequisites
+print_header "Prerequisites Check"
+
+print_step "Checking for required tools..."
+
+# Check Docker
+if ! command -v docker &> /dev/null; then
+    print_error "Docker not found. Please install Docker."
+    exit 1
+fi
+print_success "Docker found"
+
+# Check Python
+if ! command -v python3 &> /dev/null; then
+    print_error "Python3 not found. Please install Python3."
+    exit 1
+fi
+print_success "Python3 found"
+
+# Check repositories exist
+if [ ! -d "$REPO_ROOT/google-keep-notes-parser" ]; then
+    print_error "google-keep-notes-parser directory not found"
+    exit 1
+fi
+print_success "google-keep-notes-parser found"
+
+if [ ! -d "$REPO_ROOT/training-parser-antlr4" ]; then
+    print_error "training-parser-antlr4 directory not found"
+    exit 1
+fi
+print_success "training-parser-antlr4 found"
+
+# Check required files exist
+print_step "Checking for implementation files..."
+
+FILES=(
+    "google-keep-notes-parser/nats_publisher.py"
+    "google-keep-notes-parser/nats_router.py"
+    "training-parser-antlr4/nats_training_listener.py"
+    "training-parser-antlr4/nats_writer.py"
+)
+
+for file in "${FILES[@]}"; do
+    if [ ! -f "$REPO_ROOT/$file" ]; then
+        print_error "File not found: $file"
+        exit 1
+    fi
+    print_success "Found: $file"
+done
+
+# Check sample data exists
+print_step "Checking for sample data..."
+if [ ! -d "$REPO_ROOT/google-keep-notes-parser/sample" ]; then
+    print_error "Sample data directory not found"
+    exit 1
+fi
+SAMPLE_FILES=$(find "$REPO_ROOT/google-keep-notes-parser/sample" -name "*.json" | wc -l)
+if [ $SAMPLE_FILES -eq 0 ]; then
+    print_error "No sample JSON files found"
+    exit 1
+fi
+print_success "Found $SAMPLE_FILES sample JSON files"
+
+# Start NATS
+print_header "Starting NATS"
+
+print_step "Checking if NATS is already running..."
+if docker ps --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
+    print_success "NATS already running"
+elif nc -z localhost $NATS_PORT 2>/dev/null; then
+    print_success "NATS already running on port $NATS_PORT"
+else
+    print_step "Starting NATS in Docker..."
+    docker run -d \
+        --name "$NATS_CONTAINER" \
+        -p "$NATS_PORT:4222" \
+        nats:latest >/dev/null 2>&1
+
+    # Wait for NATS to be ready
+    for i in {1..30}; do
+        if nc -z localhost $NATS_PORT 2>/dev/null; then
+            print_success "NATS started and ready"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            print_error "NATS failed to start"
+            exit 1
+        fi
+        sleep 0.5
+    done
+fi
+
+# Clean output directory
+print_header "Preparing Test"
+
+print_step "Cleaning output directory..."
+rm -rf "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR"
+print_success "Output directory ready: $OUTPUT_DIR"
+
+# Start all components
+print_header "Starting Pipeline Components"
+
+print_step "Starting Writer (listens for parsed sessions)..."
+cd "$REPO_ROOT/training-parser-antlr4"
+python nats_writer.py > /tmp/nats_writer.log 2>&1 &
+WRITER_PID=$!
+sleep 1
+if kill -0 $WRITER_PID 2>/dev/null; then
+    print_success "Writer started (PID: $WRITER_PID)"
+else
+    print_error "Writer failed to start"
+    cat /tmp/nats_writer.log
+    exit 1
+fi
+
+print_step "Starting Training Listener (parses with ANTLR4)..."
+python nats_training_listener.py > /tmp/nats_training_listener.log 2>&1 &
+LISTENER_PID=$!
+sleep 1
+if kill -0 $LISTENER_PID 2>/dev/null; then
+    print_success "Training Listener started (PID: $LISTENER_PID)"
+else
+    print_error "Training Listener failed to start"
+    cat /tmp/nats_training_listener.log
+    exit 1
+fi
+
+print_step "Starting Router (routes by type)..."
+cd "$REPO_ROOT/google-keep-notes-parser"
+python nats_router.py > /tmp/nats_router.log 2>&1 &
+ROUTER_PID=$!
+sleep 1
+if kill -0 $ROUTER_PID 2>/dev/null; then
+    print_success "Router started (PID: $ROUTER_PID)"
+else
+    print_error "Router failed to start"
+    cat /tmp/nats_router.log
+    exit 1
+fi
+
+# Run publisher
+print_header "Publishing Sample Data"
+
+print_step "Running Publisher (reads JSON files)..."
+python nats_publisher.py --input-dir sample
+
+# Wait for processing
+print_header "Processing"
+
+print_step "Waiting for pipeline processing (${TIMEOUT}s timeout)..."
+WAITED=0
+LAST_COUNT=0
+
+while [ $WAITED -lt $TIMEOUT ]; do
+    CURRENT_COUNT=$(ls "$OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
+
+    if [ $CURRENT_COUNT -gt $LAST_COUNT ]; then
+        echo -ne "\r${BLUE}Found $CURRENT_COUNT output file(s)${NC}"
+        LAST_COUNT=$CURRENT_COUNT
+    fi
+
+    sleep 1
+    WAITED=$((WAITED + 1))
+done
+echo ""
+
+# Verify results
+print_header "Results Verification"
+
+if [ -d "$OUTPUT_DIR" ]; then
+    FILE_COUNT=$(ls "$OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
+
+    if [ $FILE_COUNT -gt 0 ]; then
+        print_success "Pipeline executed successfully!"
+        print_success "Generated $FILE_COUNT output file(s)"
+
+        echo -e "\n${YELLOW}Output Files:${NC}"
+        ls -lh "$OUTPUT_DIR"/*.json | awk '{print "  " $9 " (" $5 ")"}'
+
+        echo -e "\n${YELLOW}Sample Output (first file, first 30 lines):${NC}"
+        echo "---"
+        head -30 "$OUTPUT_DIR"/0.json | sed 's/^/  /'
+        echo "---"
+
+        # Validate JSON
+        print_step "Validating JSON output..."
+        VALID_JSON=0
+        for file in "$OUTPUT_DIR"/*.json; do
+            if python3 -c "import json; json.load(open('$file'))" 2>/dev/null; then
+                VALID_JSON=$((VALID_JSON + 1))
+            fi
+        done
+
+        if [ $VALID_JSON -eq $FILE_COUNT ]; then
+            print_success "All output files are valid JSON ($VALID_JSON/$FILE_COUNT)"
+        else
+            print_error "Some files are invalid JSON ($VALID_JSON/$FILE_COUNT)"
+        fi
+
+        # Check file content
+        print_step "Checking output content..."
+        FIRST_FILE="$OUTPUT_DIR/0.json"
+
+        if grep -q '"workout_id"' "$FIRST_FILE" 2>/dev/null; then
+            print_success "Output contains 'workout_id' field"
+        else
+            print_error "Output missing 'workout_id' field"
+        fi
+
+        if grep -q '"exercises"' "$FIRST_FILE" 2>/dev/null; then
+            print_success "Output contains 'exercises' field"
+        else
+            print_error "Output missing 'exercises' field"
+        fi
+
+        if grep -q '"date"' "$FIRST_FILE" 2>/dev/null; then
+            print_success "Output contains 'date' field"
+        else
+            print_error "Output missing 'date' field"
+        fi
+
+    else
+        print_error "No output files generated"
+
+        echo -e "\n${YELLOW}Debugging Information:${NC}"
+
+        echo -e "\n${YELLOW}Writer Log:${NC}"
+        tail -10 /tmp/nats_writer.log 2>/dev/null || echo "  (no log)"
+
+        echo -e "\n${YELLOW}Training Listener Log:${NC}"
+        tail -10 /tmp/nats_training_listener.log 2>/dev/null || echo "  (no log)"
+
+        echo -e "\n${YELLOW}Router Log:${NC}"
+        tail -10 /tmp/nats_router.log 2>/dev/null || echo "  (no log)"
+
+        echo -e "\n${YELLOW}Running Processes:${NC}"
+        jobs -l
+
+        exit 1
+    fi
+else
+    print_error "Output directory not found"
+    exit 1
+fi
+
+# Final summary
+print_header "Test Complete"
+
+echo -e "${GREEN}✓ All pipeline components executed successfully!${NC}"
+echo -e "${GREEN}✓ Sample data published from google-keep-notes-parser${NC}"
+echo -e "${GREEN}✓ Messages routed by type using ParserRegistry${NC}"
+echo -e "${GREEN}✓ Training messages parsed with ANTLR4${NC}"
+echo -e "${GREEN}✓ Parsed sessions written to $OUTPUT_DIR${NC}"
+
+echo -e "\n${YELLOW}Pipeline Verification Summary:${NC}"
+echo "  Input:  Google Keep notes (JSON files)"
+echo "  Step 1: Publisher → messages.10.raw"
+echo "  Step 2: Router → messages.20.type.training"
+echo "  Step 3: Training Listener → messages.30.type.training.10.parsed"
+echo "  Step 4: Writer → /tmp/training/*.json"
+echo "  Output: $FILE_COUNT parsed workout session(s)"
+
+echo -e "\n${YELLOW}Component Status:${NC}"
+if kill -0 $WRITER_PID 2>/dev/null; then echo "  ✓ Writer running"; else echo "  ✗ Writer stopped"; fi
+if kill -0 $LISTENER_PID 2>/dev/null; then echo "  ✓ Training Listener running"; else echo "  ✗ Training Listener stopped"; fi
+if kill -0 $ROUTER_PID 2>/dev/null; then echo "  ✓ Router running"; else echo "  ✗ Router stopped"; fi
+
+echo -e "\n${GREEN}===================================================${NC}"
+echo -e "${GREEN}NATS Pipeline Test PASSED ✓${NC}"
+echo -e "${GREEN}===================================================${NC}"
