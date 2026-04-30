@@ -274,6 +274,8 @@ else
     exit 1
 fi
 
+# No need to separately install nats-py - it's now in training-parser-antlr4 dependencies
+
 # Start NATS
 print_header "Starting NATS"
 
