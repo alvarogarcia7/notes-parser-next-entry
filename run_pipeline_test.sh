@@ -215,39 +215,27 @@ print_header "Installing Dependencies"
 print_step "Checking for uv installer..."
 check_uv
 
-print_step "Installing google-keep-notes-parser dependencies..."
+print_step "Syncing google-keep-notes-parser dependencies..."
 cd "$REPO_ROOT/google-keep-notes-parser"
-uv pip install -e . > /tmp/uv_publisher.log 2>&1
+uv sync > /tmp/uv_publisher.log 2>&1
 if [ $? -eq 0 ]; then
-    print_success "google-keep-notes-parser installed"
+    print_success "google-keep-notes-parser dependencies synced"
 else
-    print_error "Failed to install google-keep-notes-parser"
+    print_error "Failed to sync google-keep-notes-parser"
     echo "Log: /tmp/uv_publisher.log"
     tail -20 /tmp/uv_publisher.log
     exit 1
 fi
 
-print_step "Installing training-parser-antlr4 dependencies..."
+print_step "Syncing training-parser-antlr4 dependencies..."
 cd "$REPO_ROOT/training-parser-antlr4"
-uv pip install -e . > /tmp/uv_listener.log 2>&1
+uv sync > /tmp/uv_listener.log 2>&1
 if [ $? -eq 0 ]; then
-    print_success "training-parser-antlr4 installed"
+    print_success "training-parser-antlr4 dependencies synced"
 else
-    print_error "Failed to install training-parser-antlr4"
+    print_error "Failed to sync training-parser-antlr4"
     echo "Log: /tmp/uv_listener.log"
     tail -20 /tmp/uv_listener.log
-    exit 1
-fi
-
-# Install nats-py if not already installed
-print_step "Installing NATS client library..."
-uv pip install 'nats-py>=2.6.0' > /tmp/uv_nats.log 2>&1
-if [ $? -eq 0 ]; then
-    print_success "NATS client library installed"
-else
-    print_error "Failed to install NATS client library"
-    echo "Log: /tmp/uv_nats.log"
-    tail -20 /tmp/uv_nats.log
     exit 1
 fi
 
@@ -294,7 +282,7 @@ print_header "Starting Pipeline Components"
 
 print_step "Starting Writer (listens for parsed sessions)..."
 cd "$REPO_ROOT/training-parser-antlr4"
-python nats_writer.py > /tmp/nats_writer.log 2>&1 &
+uv run python nats_writer.py > /tmp/nats_writer.log 2>&1 &
 WRITER_PID=$!
 sleep 1
 if kill -0 $WRITER_PID 2>/dev/null; then
@@ -306,7 +294,7 @@ else
 fi
 
 print_step "Starting Training Listener (parses with ANTLR4)..."
-python nats_training_listener.py > /tmp/nats_training_listener.log 2>&1 &
+uv run python nats_training_listener.py > /tmp/nats_training_listener.log 2>&1 &
 LISTENER_PID=$!
 sleep 1
 if kill -0 $LISTENER_PID 2>/dev/null; then
@@ -319,7 +307,7 @@ fi
 
 print_step "Starting Router (routes by type)..."
 cd "$REPO_ROOT/google-keep-notes-parser"
-python nats_router.py > /tmp/nats_router.log 2>&1 &
+uv run python nats_router.py > /tmp/nats_router.log 2>&1 &
 ROUTER_PID=$!
 sleep 1
 if kill -0 $ROUTER_PID 2>/dev/null; then
@@ -334,7 +322,7 @@ fi
 print_header "Publishing Sample Data"
 
 print_step "Running Publisher (reads JSON files)..."
-python nats_publisher.py --input-dir sample
+uv run python nats_publisher.py --input-dir sample
 
 # Wait for processing
 print_header "Processing"
