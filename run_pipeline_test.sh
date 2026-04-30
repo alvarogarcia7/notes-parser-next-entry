@@ -56,6 +56,33 @@ print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
 
+# Clean up any previous resources
+print_header "Cleanup Previous Resources"
+
+print_step "Killing any existing pipeline processes..."
+pkill -f "nats_writer.py" 2>/dev/null || true
+pkill -f "nats_training_listener.py" 2>/dev/null || true
+pkill -f "nats_router.py" 2>/dev/null || true
+pkill -f "nats_publisher.py" 2>/dev/null || true
+sleep 1
+print_success "Previous processes cleaned up"
+
+print_step "Stopping any existing NATS container..."
+if docker ps --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
+    docker stop "$NATS_CONTAINER" >/dev/null 2>&1
+    docker rm "$NATS_CONTAINER" >/dev/null 2>&1
+    print_success "Existing NATS container stopped"
+else
+    print_success "No existing NATS container found"
+fi
+
+print_step "Cleaning output directory..."
+rm -rf "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR"
+print_success "Output directory cleaned"
+
+sleep 1
+
 # Check prerequisites
 print_header "Prerequisites Check"
 
@@ -148,14 +175,6 @@ else
     done
 fi
 
-# Clean output directory
-print_header "Preparing Test"
-
-print_step "Cleaning output directory..."
-rm -rf "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR"
-print_success "Output directory ready: $OUTPUT_DIR"
-
 # Start all components
 print_header "Starting Pipeline Components"
 
@@ -216,6 +235,7 @@ while [ $WAITED -lt $TIMEOUT ]; do
     if [ $CURRENT_COUNT -gt $LAST_COUNT ]; then
         echo -ne "\r${BLUE}Found $CURRENT_COUNT output file(s)${NC}"
         LAST_COUNT=$CURRENT_COUNT
+        ls "$OUTPUT_DIR"/*.json
     fi
 
     sleep 1
