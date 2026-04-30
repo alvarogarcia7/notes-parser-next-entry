@@ -201,9 +201,11 @@ else
 
     if [ $NATS_READY -eq 0 ]; then
         print_error "NATS failed to start after 15 seconds"
-        echo -e "\n${YELLOW}Docker container status:${NC}"
-        docker ps -a --filter "name=$NATS_CONTAINER" --format "table {{.Names}}\t{{.Status}}"
-        echo -e "\n${YELLOW}Docker logs:${NC}"
+        echo ""
+        echo -e "${YELLOW}Docker container status:${NC}"
+        docker ps -a --filter "name=$NATS_CONTAINER" || echo "  Container not found"
+        echo ""
+        echo -e "${YELLOW}Docker logs (last 20 lines):${NC}"
         docker logs "$NATS_CONTAINER" 2>/dev/null | tail -20 || echo "  (no logs available)"
         exit 1
     fi
