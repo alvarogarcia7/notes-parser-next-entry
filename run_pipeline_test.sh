@@ -302,28 +302,37 @@ else
 
     # Wait for NATS to be ready
     NATS_READY=0
-    for i in {1..30}; do
+    for i in {1..60}; do
         if is_port_open $NATS_PORT; then
-            print_success "NATS started and ready"
+            print_success "NATS port $NATS_PORT is open"
             NATS_READY=1
             break
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+            echo "  Waiting for NATS (${i}s)..."
         fi
         sleep 0.5
     done
 
     if [ $NATS_READY -eq 0 ]; then
-        print_error "NATS failed to start after 15 seconds"
+        print_error "NATS port not responding after 30 seconds"
         echo ""
         echo -e "${YELLOW}Docker container status:${NC}"
         docker ps -a --filter "name=$NATS_CONTAINER" || echo "  Container not found"
         echo ""
-        echo -e "${YELLOW}Docker logs (last 20 lines):${NC}"
-        docker logs "$NATS_CONTAINER" 2>/dev/null | tail -20 || echo "  (no logs available)"
+        echo -e "${YELLOW}Docker logs (last 30 lines):${NC}"
+        docker logs "$NATS_CONTAINER" 2>/dev/null | tail -30 || echo "  (no logs available)"
         exit 1
     fi
 
-    # Wait extra time to ensure NATS is fully ready for connections
-    sleep 2
+    # Wait extra time to ensure NATS is fully accepting connections
+    print_step "Waiting for NATS to fully initialize..."
+    sleep 3
+
+    # Verify NATS is actually responding by checking logs
+    if ! docker logs "$NATS_CONTAINER" 2>/dev/null | grep -q "Server is ready"; then
+        echo -e "${YELLOW}Note: NATS may still be initializing, components will retry${NC}"
+    fi
 fi
 
 # Start all components
@@ -333,24 +342,32 @@ print_step "Starting Writer (listens for parsed sessions)..."
 cd "$REPO_ROOT/training-parser-antlr4"
 uv run python nats_writer.py > /tmp/nats_writer.log 2>&1 &
 WRITER_PID=$!
-sleep 1
+sleep 2
 if kill -0 $WRITER_PID 2>/dev/null; then
     print_success "Writer started (PID: $WRITER_PID)"
 else
     print_error "Writer failed to start"
+    echo "Error output:"
     cat /tmp/nats_writer.log
+    echo ""
+    echo "Checking NATS container:"
+    docker logs "$NATS_CONTAINER" 2>/dev/null | tail -10
     exit 1
 fi
 
 print_step "Starting Training Listener (parses with ANTLR4)..."
 uv run python nats_training_listener.py > /tmp/nats_training_listener.log 2>&1 &
 LISTENER_PID=$!
-sleep 1
+sleep 2
 if kill -0 $LISTENER_PID 2>/dev/null; then
     print_success "Training Listener started (PID: $LISTENER_PID)"
 else
     print_error "Training Listener failed to start"
+    echo "Error output:"
     cat /tmp/nats_training_listener.log
+    echo ""
+    echo "Checking NATS container:"
+    docker logs "$NATS_CONTAINER" 2>/dev/null | tail -10
     exit 1
 fi
 
@@ -358,12 +375,16 @@ print_step "Starting Router (routes by type)..."
 cd "$REPO_ROOT/google-keep-notes-parser"
 uv run python nats_router.py > /tmp/nats_router.log 2>&1 &
 ROUTER_PID=$!
-sleep 1
+sleep 2
 if kill -0 $ROUTER_PID 2>/dev/null; then
     print_success "Router started (PID: $ROUTER_PID)"
 else
     print_error "Router failed to start"
+    echo "Error output:"
     cat /tmp/nats_router.log
+    echo ""
+    echo "Checking NATS container:"
+    docker logs "$NATS_CONTAINER" 2>/dev/null | tail -10
     exit 1
 fi
 
