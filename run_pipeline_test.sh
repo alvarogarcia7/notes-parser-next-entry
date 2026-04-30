@@ -15,6 +15,22 @@ NATS_URL="nats://localhost:$NATS_PORT"
 NATS_CONTAINER="nats-pipeline-test"
 OUTPUT_DIR="/tmp/training"
 TIMEOUT=15
+CLEANUP_DOCKER=0
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --cleanup-docker)
+            CLEANUP_DOCKER=1
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--cleanup-docker]"
+            exit 1
+            ;;
+    esac
+done
 
 # Cleanup function
 cleanup() {
@@ -24,29 +40,34 @@ cleanup() {
     jobs -p | xargs -r kill 2>/dev/null || true
     sleep 1
 
-    # Stop and remove NATS container (both running and stopped)
-    print_step "Cleaning up Docker containers..."
+    # Only clean up Docker if requested
+    if [ $CLEANUP_DOCKER -eq 1 ]; then
+        print_step "Cleaning up Docker containers..."
 
-    # Remove running container
-    if docker ps --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
-        echo "  Stopping running NATS container..."
-        docker stop "$NATS_CONTAINER" >/dev/null 2>&1
+        # Remove running container
+        if docker ps --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
+            echo "  Stopping running NATS container..."
+            docker stop "$NATS_CONTAINER" >/dev/null 2>&1
+        fi
+
+        # Remove stopped container
+        if docker ps -a --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
+            echo "  Removing NATS container..."
+            docker rm "$NATS_CONTAINER" >/dev/null 2>&1
+        fi
+
+        # Clean up any other nats containers that might be leftover
+        ORPHAN_CONTAINERS=$(docker ps -a --filter "ancestor=nats:latest" --format "{{.Names}}" 2>/dev/null | grep -v "^${NATS_CONTAINER}$" || true)
+        if [ ! -z "$ORPHAN_CONTAINERS" ]; then
+            echo "  Removing orphaned NATS containers..."
+            echo "$ORPHAN_CONTAINERS" | xargs -r docker rm -f 2>/dev/null || true
+        fi
+
+        print_success "Docker cleanup complete"
+    else
+        print_success "Docker containers preserved (use --cleanup-docker to remove)"
     fi
 
-    # Remove stopped container
-    if docker ps -a --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
-        echo "  Removing NATS container..."
-        docker rm "$NATS_CONTAINER" >/dev/null 2>&1
-    fi
-
-    # Clean up any other nats containers that might be leftover
-    ORPHAN_CONTAINERS=$(docker ps -a --filter "ancestor=nats:latest" --format "{{.Names}}" 2>/dev/null | grep -v "^${NATS_CONTAINER}$" || true)
-    if [ ! -z "$ORPHAN_CONTAINERS" ]; then
-        echo "  Removing orphaned NATS containers..."
-        echo "$ORPHAN_CONTAINERS" | xargs -r docker rm -f 2>/dev/null || true
-    fi
-
-    print_success "Docker cleanup complete"
     echo -e "${GREEN}✓ Cleanup complete${NC}"
 }
 
@@ -110,25 +131,39 @@ pkill -f "nats_publisher.py" 2>/dev/null || true
 sleep 1
 print_success "Previous processes cleaned up"
 
-print_step "Stopping any existing Docker containers..."
-
-# Remove running container
-if docker ps --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
-    docker stop "$NATS_CONTAINER" >/dev/null 2>&1
-fi
-
-# Remove stopped container
+# Check if Docker container exists and reuse it
+print_step "Checking for existing Docker containers..."
 if docker ps -a --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
-    docker rm "$NATS_CONTAINER" >/dev/null 2>&1
+    if docker ps --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
+        print_success "NATS container already running"
+    else
+        print_success "NATS container exists (stopped) - will reuse"
+    fi
+else
+    print_success "No existing NATS container found"
 fi
 
-# Clean up any orphaned nats containers
-ORPHAN_CONTAINERS=$(docker ps -a --filter "ancestor=nats:latest" --format "{{.Names}}" 2>/dev/null | grep -v "^${NATS_CONTAINER}$" || true)
-if [ ! -z "$ORPHAN_CONTAINERS" ]; then
-    docker rm -f $ORPHAN_CONTAINERS 2>/dev/null || true
-fi
+if [ $CLEANUP_DOCKER -eq 1 ]; then
+    print_step "Removing Docker containers (--cleanup-docker flag set)..."
 
-print_success "Docker containers cleaned up"
+    # Remove running container
+    if docker ps --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
+        docker stop "$NATS_CONTAINER" >/dev/null 2>&1
+    fi
+
+    # Remove stopped container
+    if docker ps -a --format '{{.Names}}' | grep -q "^${NATS_CONTAINER}$"; then
+        docker rm "$NATS_CONTAINER" >/dev/null 2>&1
+    fi
+
+    # Clean up any orphaned nats containers
+    ORPHAN_CONTAINERS=$(docker ps -a --filter "ancestor=nats:latest" --format "{{.Names}}" 2>/dev/null | grep -v "^${NATS_CONTAINER}$" || true)
+    if [ ! -z "$ORPHAN_CONTAINERS" ]; then
+        docker rm -f $ORPHAN_CONTAINERS 2>/dev/null || true
+    fi
+
+    print_success "Docker containers removed"
+fi
 
 print_step "Cleaning output directory..."
 rm -rf "$OUTPUT_DIR"
