@@ -11,7 +11,7 @@ NC='\033[0m'
 # Configuration
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NATS_PORT=4222
-NATS_URL="nats://localhost:$NATS_PORT"
+NATS_URL="nats://docker:$NATS_PORT"
 NATS_CONTAINER="nats-pipeline-test"
 OUTPUT_DIR="/tmp/training"
 TIMEOUT=15
