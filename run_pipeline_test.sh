@@ -321,6 +321,9 @@ else
         docker logs "$NATS_CONTAINER" 2>/dev/null | tail -20 || echo "  (no logs available)"
         exit 1
     fi
+
+    # Wait extra time to ensure NATS is fully ready for connections
+    sleep 2
 fi
 
 # Start all components
