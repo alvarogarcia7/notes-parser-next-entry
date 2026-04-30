@@ -274,7 +274,16 @@ else
     exit 1
 fi
 
-# No need to separately install nats-py - it's now in training-parser-antlr4 dependencies
+print_step "Generating ANTLR4 grammar files..."
+make compile-grammar > /tmp/antlr_compile.log 2>&1
+if [ $? -eq 0 ]; then
+    print_success "ANTLR4 grammar compiled"
+else
+    print_error "Failed to compile ANTLR4 grammar"
+    echo "Log: /tmp/antlr_compile.log"
+    tail -20 /tmp/antlr_compile.log
+    exit 1
+fi
 
 # Start NATS
 print_header "Starting NATS"
