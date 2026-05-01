@@ -15,6 +15,7 @@ the CA can perform authorized operations.
 """
 
 import asyncio
+import os
 import ssl
 import sys
 from pathlib import Path
@@ -132,7 +133,11 @@ async def test_tls_connection_security(tls_url: str, certs_dir: str) -> bool:
 
 async def main():
     """Run all TLS security tests."""
-    tls_url = "tls://docker:4222"
+    tls_url = os.environ.get("NATS_URL")
+    if not tls_url:
+        print("❌ ERROR: NATS_URL environment variable not set")
+        sys.exit(1)
+
     script_dir = Path(__file__).parent
     certs_dir = script_dir / "certs"
 

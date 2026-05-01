@@ -4,6 +4,7 @@ Diagnostic test to understand NATS TLS behavior.
 """
 
 import asyncio
+import os
 import ssl
 import sys
 
@@ -16,9 +17,15 @@ async def main():
     print("=" * 70)
 
     # Test 1: Plain connection
-    print("\n1. Attempting PLAIN connection to nats://docker:4222...")
+    nats_url = os.environ.get("NATS_URL")
+    if not nats_url:
+        print("Error: NATS_URL environment variable not set")
+        return
+
+    nats_plain_url = nats_url.replace("tls://", "nats://")
+    print(f"\n1. Attempting PLAIN connection to {nats_plain_url}...")
     try:
-        nc = await nats.connect("nats://docker:4222", connect_timeout=2)
+        nc = await nats.connect(nats_plain_url, connect_timeout=2)
         print(f"   ✓ Connected: {nc._client_id}")
         print(f"   Connection type: {type(nc._socket)}")
         print(f"   Is TLS: {isinstance(nc._socket, ssl.SSLSocket)}")
@@ -30,7 +37,7 @@ async def main():
     print("\n2. Attempting TLS connection WITHOUT client cert...")
     try:
         ctx = ssl.create_default_context()
-        nc = await nats.connect("tls://docker:4222", tls=ctx, connect_timeout=2)
+        nc = await nats.connect(nats_url, tls=ctx, connect_timeout=2)
         print(f"   ✓ Connected: {nc._client_id}")
         print(f"   Is TLS: {isinstance(nc._socket, ssl.SSLSocket)}")
         await nc.close()
@@ -43,7 +50,7 @@ async def main():
         ctx = ssl.create_default_context()
         ctx.load_verify_locations(cafile="certs/rootCA.pem")
         ctx.load_cert_chain(certfile="certs/client.pem", keyfile="certs/client.key")
-        nc = await nats.connect("tls://docker:4222", tls=ctx, connect_timeout=2)
+        nc = await nats.connect(nats_url, tls=ctx, connect_timeout=2)
         print(f"   ✓ Connected: {nc._client_id}")
         print(f"   Is TLS: {isinstance(nc._socket, ssl.SSLSocket)}")
         await nc.close()

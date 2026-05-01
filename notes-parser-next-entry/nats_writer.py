@@ -13,7 +13,10 @@ from pathlib import Path
 
 import nats
 
-NATS_URL = os.environ.get("NATS_URL", "tls://docker:4222")
+NATS_URL = os.environ.get("NATS_URL")
+if not NATS_URL:
+    print("Error: NATS_URL environment variable not set")
+    sys.exit(1)
 CERTS_DIR = os.environ.get("CERTS_DIR", "/tmp/nats-certs")
 INPUT_TOPIC = "messages.30.type.next.10.parsed"
 OUTPUT_DIR = "/tmp/next-entries"
