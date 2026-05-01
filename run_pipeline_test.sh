@@ -15,6 +15,7 @@ NATS_URL="nats://docker:$NATS_PORT"
 NATS_CONTAINER="nats-pipeline-test"
 TRAINING_OUTPUT_DIR="/tmp/training"
 TIME_ENTRIES_OUTPUT_DIR="/tmp/time-entries"
+NEXT_OUTPUT_DIR="/tmp/next-entries"
 TIMEOUT=15
 CLEANUP_DOCKER=0
 
@@ -128,6 +129,7 @@ print_step "Killing any existing pipeline processes..."
 pkill -f "nats_writer.py" 2>/dev/null || true
 pkill -f "nats_training_listener.py" 2>/dev/null || true
 pkill -f "nats_time_listener.py" 2>/dev/null || true
+pkill -f "nats_next_listener.py" 2>/dev/null || true
 pkill -f "router.py" 2>/dev/null || true
 pkill -f "nats_publisher.py" 2>/dev/null || true
 sleep 1
@@ -168,8 +170,8 @@ if [ $CLEANUP_DOCKER -eq 1 ]; then
 fi
 
 print_step "Cleaning output directories..."
-rm -rf "$TRAINING_OUTPUT_DIR" "$TIME_ENTRIES_OUTPUT_DIR"
-mkdir -p "$TRAINING_OUTPUT_DIR" "$TIME_ENTRIES_OUTPUT_DIR"
+rm -rf "$TRAINING_OUTPUT_DIR" "$TIME_ENTRIES_OUTPUT_DIR" "$NEXT_OUTPUT_DIR"
+mkdir -p "$TRAINING_OUTPUT_DIR" "$TIME_ENTRIES_OUTPUT_DIR" "$NEXT_OUTPUT_DIR"
 print_success "Output directories cleaned"
 
 sleep 1
@@ -218,6 +220,12 @@ if [ ! -d "$REPO_ROOT/time-entry-notes-parser" ]; then
 fi
 print_success "time-entry-notes-parser found"
 
+if [ ! -d "$REPO_ROOT/notes-parser-next-entry" ]; then
+    print_error "notes-parser-next-entry directory not found"
+    exit 1
+fi
+print_success "notes-parser-next-entry found"
+
 # Check required files exist
 print_step "Checking for implementation files..."
 
@@ -228,6 +236,8 @@ FILES=(
     "training-parser-antlr4/nats_writer.py"
     "time-entry-notes-parser/nats_time_listener.py"
     "time-entry-notes-parser/nats_writer.py"
+    "notes-parser-next-entry/nats_next_listener.py"
+    "notes-parser-next-entry/nats_writer.py"
 )
 
 for file in "${FILES[@]}"; do
@@ -311,6 +321,18 @@ else
     print_error "Failed to sync time-entry-notes-parser"
     echo "Log: /tmp/uv_time_entry.log"
     tail -20 /tmp/uv_time_entry.log
+    exit 1
+fi
+
+print_step "Syncing notes-parser-next-entry dependencies..."
+cd "$REPO_ROOT/notes-parser-next-entry"
+uv sync > /tmp/uv_next_entry.log 2>&1
+if [ $? -eq 0 ]; then
+    print_success "notes-parser-next-entry dependencies synced"
+else
+    print_error "Failed to sync notes-parser-next-entry"
+    echo "Log: /tmp/uv_next_entry.log"
+    tail -20 /tmp/uv_next_entry.log
     exit 1
 fi
 
@@ -445,6 +467,39 @@ else
     exit 1
 fi
 
+print_step "Starting Next Entry Writer (writes parsed next entries)..."
+cd "$REPO_ROOT/notes-parser-next-entry"
+uv run python nats_writer.py > /tmp/nats_next_writer.log 2>&1 &
+NEXT_WRITER_PID=$!
+sleep 2
+if kill -0 $NEXT_WRITER_PID 2>/dev/null; then
+    print_success "Next Entry Writer started (PID: $NEXT_WRITER_PID)"
+else
+    print_error "Next Entry Writer failed to start"
+    echo "Error output:"
+    cat /tmp/nats_next_writer.log
+    echo ""
+    echo "Checking NATS container:"
+    docker logs "$NATS_CONTAINER" 2>/dev/null | tail -10
+    exit 1
+fi
+
+print_step "Starting Next Entry Listener (parses next entries)..."
+uv run python nats_next_listener.py > /tmp/nats_next_listener.log 2>&1 &
+NEXT_LISTENER_PID=$!
+sleep 2
+if kill -0 $NEXT_LISTENER_PID 2>/dev/null; then
+    print_success "Next Entry Listener started (PID: $NEXT_LISTENER_PID)"
+else
+    print_error "Next Entry Listener failed to start"
+    echo "Error output:"
+    cat /tmp/nats_next_listener.log
+    echo ""
+    echo "Checking NATS container:"
+    docker logs "$NATS_CONTAINER" 2>/dev/null | tail -10
+    exit 1
+fi
+
 print_step "Starting Router (routes by type)..."
 cd "$REPO_ROOT/project-router/nats-poc/subscriber-python"
 uv run nats-router > /tmp/nats_router.log 2>&1 &
@@ -476,18 +531,23 @@ print_step "Waiting for pipeline processing (${TIMEOUT}s timeout)..."
 WAITED=0
 TRAINING_COUNT=0
 TIME_ENTRIES_COUNT=0
+NEXT_COUNT=0
 
 while [ $WAITED -lt $TIMEOUT ]; do
     TRAINING_COUNT=$(ls "$TRAINING_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
     TIME_ENTRIES_COUNT=$(ls "$TIME_ENTRIES_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
+    NEXT_COUNT=$(ls "$NEXT_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
 
-    if [ $TRAINING_COUNT -gt 0 ] || [ $TIME_ENTRIES_COUNT -gt 0 ]; then
-        echo -ne "\r${BLUE}Found $TRAINING_COUNT training file(s), $TIME_ENTRIES_COUNT time entry file(s)${NC}"
+    if [ $TRAINING_COUNT -gt 0 ] || [ $TIME_ENTRIES_COUNT -gt 0 ] || [ $NEXT_COUNT -gt 0 ]; then
+        echo -ne "\r${BLUE}Found $TRAINING_COUNT training file(s), $TIME_ENTRIES_COUNT time entry file(s), $NEXT_COUNT next entry file(s)${NC}"
         if [ $TRAINING_COUNT -gt 0 ]; then
             ls "$TRAINING_OUTPUT_DIR"/*.json 2>/dev/null || true
         fi
         if [ $TIME_ENTRIES_COUNT -gt 0 ]; then
             ls "$TIME_ENTRIES_OUTPUT_DIR"/*.json 2>/dev/null || true
+        fi
+        if [ $NEXT_COUNT -gt 0 ]; then
+            ls "$NEXT_OUTPUT_DIR"/*.json 2>/dev/null || true
         fi
     fi
 
@@ -501,10 +561,11 @@ print_header "Results Verification"
 
 TRAINING_FILES=$(ls "$TRAINING_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
 TIME_ENTRY_FILES=$(ls "$TIME_ENTRIES_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
+NEXT_FILES=$(ls "$NEXT_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
 
-if [ $TRAINING_FILES -gt 0 ] || [ $TIME_ENTRY_FILES -gt 0 ]; then
+if [ $TRAINING_FILES -gt 0 ] || [ $TIME_ENTRY_FILES -gt 0 ] || [ $NEXT_FILES -gt 0 ]; then
     print_success "Pipeline executed successfully!"
-    print_success "Generated $TRAINING_FILES training file(s) and $TIME_ENTRY_FILES time entry file(s)"
+    print_success "Generated $TRAINING_FILES training file(s), $TIME_ENTRY_FILES time entry file(s), and $NEXT_FILES next entry file(s)"
 
     if [ $TRAINING_FILES -gt 0 ]; then
         echo -e "\n${YELLOW}Training Output Files:${NC}"
@@ -523,6 +584,16 @@ if [ $TRAINING_FILES -gt 0 ] || [ $TIME_ENTRY_FILES -gt 0 ]; then
         echo -e "\n${YELLOW}Time Entry Sample Output (first file, first 30 lines):${NC}"
         echo "---"
         head -30 "$TIME_ENTRIES_OUTPUT_DIR"/0.json | sed 's/^/  /'
+        echo "---"
+    fi
+
+    if [ $NEXT_FILES -gt 0 ]; then
+        echo -e "\n${YELLOW}Next Entry Output Files:${NC}"
+        ls -lh "$NEXT_OUTPUT_DIR"/*.json | awk '{print "  " $9 " (" $5 ")"}'
+
+        echo -e "\n${YELLOW}Next Entry Sample Output (first file, first 30 lines):${NC}"
+        echo "---"
+        head -30 "$NEXT_OUTPUT_DIR"/0.json | sed 's/^/  /'
         echo "---"
     fi
 
@@ -581,6 +652,32 @@ if [ $TRAINING_FILES -gt 0 ] || [ $TIME_ENTRY_FILES -gt 0 ]; then
         fi
     fi
 
+    # Validate JSON for next entry files
+    if [ $NEXT_FILES -gt 0 ]; then
+        print_step "Validating next entry JSON output..."
+        VALID_JSON=0
+        for file in "$NEXT_OUTPUT_DIR"/*.json; do
+            if python3 -c "import json; json.load(open('$file'))" 2>/dev/null; then
+                VALID_JSON=$((VALID_JSON + 1))
+            fi
+        done
+        if [ $VALID_JSON -eq $NEXT_FILES ]; then
+            print_success "All next entry output files are valid JSON ($VALID_JSON/$NEXT_FILES)"
+        else
+            print_error "Some next entry files are invalid JSON ($VALID_JSON/$NEXT_FILES)"
+        fi
+
+        # Check next entry file content
+        print_step "Checking next entry output content..."
+        FIRST_NEXT_FILE="$NEXT_OUTPUT_DIR/0.json"
+        if grep -q '"projects"' "$FIRST_NEXT_FILE" 2>/dev/null; then
+            print_success "Output contains 'projects' field"
+        fi
+        if grep -q '"note_date"' "$FIRST_NEXT_FILE" 2>/dev/null; then
+            print_success "Output contains 'note_date' field"
+        fi
+    fi
+
 else
     print_error "No output files generated"
 
@@ -597,6 +694,12 @@ else
 
     echo -e "\n${YELLOW}Time Entry Listener Log:${NC}"
     tail -10 /tmp/nats_time_listener.log 2>/dev/null || echo "  (no log)"
+
+    echo -e "\n${YELLOW}Next Entry Writer Log:${NC}"
+    tail -10 /tmp/nats_next_writer.log 2>/dev/null || echo "  (no log)"
+
+    echo -e "\n${YELLOW}Next Entry Listener Log:${NC}"
+    tail -10 /tmp/nats_next_listener.log 2>/dev/null || echo "  (no log)"
 
     echo -e "\n${YELLOW}Router Log:${NC}"
     tail -10 /tmp/nats_router.log 2>/dev/null || echo "  (no log)"
@@ -615,22 +718,26 @@ echo -e "${GREEN}✓ Sample data published from google-keep-notes-parser${NC}"
 echo -e "${GREEN}✓ Messages routed by type using ParserRegistry${NC}"
 echo -e "${GREEN}✓ Training messages parsed with ANTLR4${NC}"
 echo -e "${GREEN}✓ Time entry messages parsed${NC}"
-echo -e "${GREEN}✓ Parsed sessions written to /tmp/training and /tmp/time-entries${NC}"
+echo -e "${GREEN}✓ Next entry messages parsed${NC}"
+echo -e "${GREEN}✓ Parsed data written to /tmp/training, /tmp/time-entries, and /tmp/next-entries${NC}"
 
 echo -e "\n${YELLOW}Pipeline Verification Summary:${NC}"
 echo "  Input:  Google Keep notes (JSON files)"
 echo "  Step 1: Publisher → messages.10.raw"
-echo "  Step 2: Router → messages.20.type.training and messages.20.type.time"
+echo "  Step 2: Router → messages.20.type.training, messages.20.type.time, messages.20.type.next"
 echo "  Step 3a: Training Listener → messages.30.type.training.10.parsed"
 echo "  Step 3b: Time Entry Listener → messages.30.type.time.10.parsed"
-echo "  Step 4: Writers → /tmp/training/*.json and /tmp/time-entries/*.json"
-echo "  Output: $TRAINING_FILES parsed workout session(s), $TIME_ENTRY_FILES parsed time entry(ies)"
+echo "  Step 3c: Next Entry Listener → messages.30.type.next.10.parsed"
+echo "  Step 4: Writers → /tmp/training/*.json, /tmp/time-entries/*.json, /tmp/next-entries/*.json"
+echo "  Output: $TRAINING_FILES workout(s), $TIME_ENTRY_FILES time entry(ies), $NEXT_FILES next entry(ies)"
 
 echo -e "\n${YELLOW}Component Status:${NC}"
 if kill -0 $WRITER_PID 2>/dev/null; then echo "  ✓ Training Writer running"; else echo "  ✗ Training Writer stopped"; fi
 if kill -0 $LISTENER_PID 2>/dev/null; then echo "  ✓ Training Listener running"; else echo "  ✗ Training Listener stopped"; fi
 if kill -0 $TIME_WRITER_PID 2>/dev/null; then echo "  ✓ Time Entry Writer running"; else echo "  ✗ Time Entry Writer stopped"; fi
 if kill -0 $TIME_LISTENER_PID 2>/dev/null; then echo "  ✓ Time Entry Listener running"; else echo "  ✗ Time Entry Listener stopped"; fi
+if kill -0 $NEXT_WRITER_PID 2>/dev/null; then echo "  ✓ Next Entry Writer running"; else echo "  ✗ Next Entry Writer stopped"; fi
+if kill -0 $NEXT_LISTENER_PID 2>/dev/null; then echo "  ✓ Next Entry Listener running"; else echo "  ✗ Next Entry Listener stopped"; fi
 if kill -0 $ROUTER_PID 2>/dev/null; then echo "  ✓ Router running"; else echo "  ✗ Router stopped"; fi
 
 echo -e "\n${GREEN}===================================================${NC}"
