@@ -126,7 +126,7 @@ print_header "Cleanup Previous Resources"
 print_step "Killing any existing pipeline processes..."
 pkill -f "nats_writer.py" 2>/dev/null || true
 pkill -f "nats_training_listener.py" 2>/dev/null || true
-pkill -f "nats_router.py" 2>/dev/null || true
+pkill -f "router.py" 2>/dev/null || true
 pkill -f "nats_publisher.py" 2>/dev/null || true
 sleep 1
 print_success "Previous processes cleaned up"
@@ -204,12 +204,18 @@ if [ ! -d "$REPO_ROOT/training-parser-antlr4" ]; then
 fi
 print_success "training-parser-antlr4 found"
 
+if [ ! -d "$REPO_ROOT/project-router" ]; then
+    print_error "project-router directory not found"
+    exit 1
+fi
+print_success "project-router found"
+
 # Check required files exist
 print_step "Checking for implementation files..."
 
 FILES=(
     "google-keep-notes-parser/nats_publisher.py"
-    "google-keep-notes-parser/nats_router.py"
+    "project-router/nats-poc/subscriber-python/src/nats_subscriber/router.py"
     "training-parser-antlr4/nats_training_listener.py"
     "training-parser-antlr4/nats_writer.py"
 )
@@ -274,7 +280,20 @@ else
     exit 1
 fi
 
+print_step "Syncing project-router/nats-poc/subscriber-python dependencies..."
+cd "$REPO_ROOT/project-router/nats-poc/subscriber-python"
+uv pip install -e . > /tmp/uv_router.log 2>&1
+if [ $? -eq 0 ]; then
+    print_success "project-router dependencies synced"
+else
+    print_error "Failed to sync project-router"
+    echo "Log: /tmp/uv_router.log"
+    tail -20 /tmp/uv_router.log
+    exit 1
+fi
+
 print_step "Generating ANTLR4 grammar files..."
+cd "$REPO_ROOT/training-parser-antlr4"
 make compile-grammar > /tmp/antlr_compile.log 2>&1
 if [ $? -eq 0 ]; then
     print_success "ANTLR4 grammar compiled"
@@ -372,8 +391,8 @@ else
 fi
 
 print_step "Starting Router (routes by type)..."
-cd "$REPO_ROOT/google-keep-notes-parser"
-uv run python nats_router.py > /tmp/nats_router.log 2>&1 &
+cd "$REPO_ROOT/project-router/nats-poc/subscriber-python"
+uv run nats-router > /tmp/nats_router.log 2>&1 &
 ROUTER_PID=$!
 sleep 2
 if kill -0 $ROUTER_PID 2>/dev/null; then
@@ -392,6 +411,7 @@ fi
 print_header "Publishing Sample Data"
 
 print_step "Running Publisher (reads JSON files)..."
+cd "$REPO_ROOT/google-keep-notes-parser"
 uv run python nats_publisher.py --input-dir sample
 
 # Wait for processing
