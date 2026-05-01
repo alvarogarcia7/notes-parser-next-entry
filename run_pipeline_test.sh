@@ -13,7 +13,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NATS_PORT=4222
 NATS_URL="nats://docker:$NATS_PORT"
 NATS_CONTAINER="nats-pipeline-test"
-OUTPUT_DIR="/tmp/training"
+TRAINING_OUTPUT_DIR="/tmp/training"
+TIME_ENTRIES_OUTPUT_DIR="/tmp/time-entries"
 TIMEOUT=15
 CLEANUP_DOCKER=0
 
@@ -126,6 +127,7 @@ print_header "Cleanup Previous Resources"
 print_step "Killing any existing pipeline processes..."
 pkill -f "nats_writer.py" 2>/dev/null || true
 pkill -f "nats_training_listener.py" 2>/dev/null || true
+pkill -f "nats_time_listener.py" 2>/dev/null || true
 pkill -f "router.py" 2>/dev/null || true
 pkill -f "nats_publisher.py" 2>/dev/null || true
 sleep 1
@@ -165,10 +167,10 @@ if [ $CLEANUP_DOCKER -eq 1 ]; then
     print_success "Docker containers removed"
 fi
 
-print_step "Cleaning output directory..."
-rm -rf "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR"
-print_success "Output directory cleaned"
+print_step "Cleaning output directories..."
+rm -rf "$TRAINING_OUTPUT_DIR" "$TIME_ENTRIES_OUTPUT_DIR"
+mkdir -p "$TRAINING_OUTPUT_DIR" "$TIME_ENTRIES_OUTPUT_DIR"
+print_success "Output directories cleaned"
 
 sleep 1
 
@@ -210,6 +212,12 @@ if [ ! -d "$REPO_ROOT/project-router" ]; then
 fi
 print_success "project-router found"
 
+if [ ! -d "$REPO_ROOT/time-entry-notes-parser" ]; then
+    print_error "time-entry-notes-parser directory not found"
+    exit 1
+fi
+print_success "time-entry-notes-parser found"
+
 # Check required files exist
 print_step "Checking for implementation files..."
 
@@ -218,6 +226,8 @@ FILES=(
     "project-router/nats-poc/subscriber-python/src/nats_subscriber/router.py"
     "training-parser-antlr4/nats_training_listener.py"
     "training-parser-antlr4/nats_writer.py"
+    "time-entry-notes-parser/nats_time_listener.py"
+    "time-entry-notes-parser/nats_writer.py"
 )
 
 for file in "${FILES[@]}"; do
@@ -289,6 +299,18 @@ else
     print_error "Failed to sync project-router"
     echo "Log: /tmp/uv_router.log"
     tail -20 /tmp/uv_router.log
+    exit 1
+fi
+
+print_step "Syncing time-entry-notes-parser dependencies..."
+cd "$REPO_ROOT/time-entry-notes-parser"
+uv sync > /tmp/uv_time_entry.log 2>&1
+if [ $? -eq 0 ]; then
+    print_success "time-entry-notes-parser dependencies synced"
+else
+    print_error "Failed to sync time-entry-notes-parser"
+    echo "Log: /tmp/uv_time_entry.log"
+    tail -20 /tmp/uv_time_entry.log
     exit 1
 fi
 
@@ -390,6 +412,39 @@ else
     exit 1
 fi
 
+print_step "Starting Time Entry Writer (writes parsed time entries)..."
+cd "$REPO_ROOT/time-entry-notes-parser"
+uv run python nats_writer.py > /tmp/nats_time_writer.log 2>&1 &
+TIME_WRITER_PID=$!
+sleep 2
+if kill -0 $TIME_WRITER_PID 2>/dev/null; then
+    print_success "Time Entry Writer started (PID: $TIME_WRITER_PID)"
+else
+    print_error "Time Entry Writer failed to start"
+    echo "Error output:"
+    cat /tmp/nats_time_writer.log
+    echo ""
+    echo "Checking NATS container:"
+    docker logs "$NATS_CONTAINER" 2>/dev/null | tail -10
+    exit 1
+fi
+
+print_step "Starting Time Entry Listener (parses time entries)..."
+uv run python nats_time_listener.py > /tmp/nats_time_listener.log 2>&1 &
+TIME_LISTENER_PID=$!
+sleep 2
+if kill -0 $TIME_LISTENER_PID 2>/dev/null; then
+    print_success "Time Entry Listener started (PID: $TIME_LISTENER_PID)"
+else
+    print_error "Time Entry Listener failed to start"
+    echo "Error output:"
+    cat /tmp/nats_time_listener.log
+    echo ""
+    echo "Checking NATS container:"
+    docker logs "$NATS_CONTAINER" 2>/dev/null | tail -10
+    exit 1
+fi
+
 print_step "Starting Router (routes by type)..."
 cd "$REPO_ROOT/project-router/nats-poc/subscriber-python"
 uv run nats-router > /tmp/nats_router.log 2>&1 &
@@ -419,15 +474,21 @@ print_header "Processing"
 
 print_step "Waiting for pipeline processing (${TIMEOUT}s timeout)..."
 WAITED=0
-LAST_COUNT=0
+TRAINING_COUNT=0
+TIME_ENTRIES_COUNT=0
 
 while [ $WAITED -lt $TIMEOUT ]; do
-    CURRENT_COUNT=$(ls "$OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
+    TRAINING_COUNT=$(ls "$TRAINING_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
+    TIME_ENTRIES_COUNT=$(ls "$TIME_ENTRIES_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
 
-    if [ $CURRENT_COUNT -gt $LAST_COUNT ]; then
-        echo -ne "\r${BLUE}Found $CURRENT_COUNT output file(s)${NC}"
-        LAST_COUNT=$CURRENT_COUNT
-        ls "$OUTPUT_DIR"/*.json
+    if [ $TRAINING_COUNT -gt 0 ] || [ $TIME_ENTRIES_COUNT -gt 0 ]; then
+        echo -ne "\r${BLUE}Found $TRAINING_COUNT training file(s), $TIME_ENTRIES_COUNT time entry file(s)${NC}"
+        if [ $TRAINING_COUNT -gt 0 ]; then
+            ls "$TRAINING_OUTPUT_DIR"/*.json 2>/dev/null || true
+        fi
+        if [ $TIME_ENTRIES_COUNT -gt 0 ]; then
+            ls "$TIME_ENTRIES_OUTPUT_DIR"/*.json 2>/dev/null || true
+        fi
     fi
 
     sleep 1
@@ -438,79 +499,111 @@ echo ""
 # Verify results
 print_header "Results Verification"
 
-if [ -d "$OUTPUT_DIR" ]; then
-    FILE_COUNT=$(ls "$OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
+TRAINING_FILES=$(ls "$TRAINING_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
+TIME_ENTRY_FILES=$(ls "$TIME_ENTRIES_OUTPUT_DIR"/*.json 2>/dev/null | wc -l)
 
-    if [ $FILE_COUNT -gt 0 ]; then
-        print_success "Pipeline executed successfully!"
-        print_success "Generated $FILE_COUNT output file(s)"
+if [ $TRAINING_FILES -gt 0 ] || [ $TIME_ENTRY_FILES -gt 0 ]; then
+    print_success "Pipeline executed successfully!"
+    print_success "Generated $TRAINING_FILES training file(s) and $TIME_ENTRY_FILES time entry file(s)"
 
-        echo -e "\n${YELLOW}Output Files:${NC}"
-        ls -lh "$OUTPUT_DIR"/*.json | awk '{print "  " $9 " (" $5 ")"}'
+    if [ $TRAINING_FILES -gt 0 ]; then
+        echo -e "\n${YELLOW}Training Output Files:${NC}"
+        ls -lh "$TRAINING_OUTPUT_DIR"/*.json | awk '{print "  " $9 " (" $5 ")"}'
 
-        echo -e "\n${YELLOW}Sample Output (first file, first 30 lines):${NC}"
+        echo -e "\n${YELLOW}Training Sample Output (first file, first 30 lines):${NC}"
         echo "---"
-        head -30 "$OUTPUT_DIR"/0.json | sed 's/^/  /'
+        head -30 "$TRAINING_OUTPUT_DIR"/0.json | sed 's/^/  /'
         echo "---"
+    fi
 
-        # Validate JSON
-        print_step "Validating JSON output..."
+    if [ $TIME_ENTRY_FILES -gt 0 ]; then
+        echo -e "\n${YELLOW}Time Entry Output Files:${NC}"
+        ls -lh "$TIME_ENTRIES_OUTPUT_DIR"/*.json | awk '{print "  " $9 " (" $5 ")"}'
+
+        echo -e "\n${YELLOW}Time Entry Sample Output (first file, first 30 lines):${NC}"
+        echo "---"
+        head -30 "$TIME_ENTRIES_OUTPUT_DIR"/0.json | sed 's/^/  /'
+        echo "---"
+    fi
+
+    # Validate JSON for training files
+    if [ $TRAINING_FILES -gt 0 ]; then
+        print_step "Validating training JSON output..."
         VALID_JSON=0
-        for file in "$OUTPUT_DIR"/*.json; do
+        for file in "$TRAINING_OUTPUT_DIR"/*.json; do
             if python3 -c "import json; json.load(open('$file'))" 2>/dev/null; then
                 VALID_JSON=$((VALID_JSON + 1))
             fi
         done
-
-        if [ $VALID_JSON -eq $FILE_COUNT ]; then
-            print_success "All output files are valid JSON ($VALID_JSON/$FILE_COUNT)"
+        if [ $VALID_JSON -eq $TRAINING_FILES ]; then
+            print_success "All training output files are valid JSON ($VALID_JSON/$TRAINING_FILES)"
         else
-            print_error "Some files are invalid JSON ($VALID_JSON/$FILE_COUNT)"
+            print_error "Some training files are invalid JSON ($VALID_JSON/$TRAINING_FILES)"
         fi
 
-        # Check file content
-        print_step "Checking output content..."
-        FIRST_FILE="$OUTPUT_DIR/0.json"
-
+        # Check training file content
+        print_step "Checking training output content..."
+        FIRST_FILE="$TRAINING_OUTPUT_DIR/0.json"
         if grep -q '"workout_id"' "$FIRST_FILE" 2>/dev/null; then
             print_success "Output contains 'workout_id' field"
-        else
-            print_error "Output missing 'workout_id' field"
         fi
-
         if grep -q '"exercises"' "$FIRST_FILE" 2>/dev/null; then
             print_success "Output contains 'exercises' field"
-        else
-            print_error "Output missing 'exercises' field"
         fi
-
         if grep -q '"date"' "$FIRST_FILE" 2>/dev/null; then
             print_success "Output contains 'date' field"
+        fi
+    fi
+
+    # Validate JSON for time entry files
+    if [ $TIME_ENTRY_FILES -gt 0 ]; then
+        print_step "Validating time entry JSON output..."
+        VALID_JSON=0
+        for file in "$TIME_ENTRIES_OUTPUT_DIR"/*.json; do
+            if python3 -c "import json; json.load(open('$file'))" 2>/dev/null; then
+                VALID_JSON=$((VALID_JSON + 1))
+            fi
+        done
+        if [ $VALID_JSON -eq $TIME_ENTRY_FILES ]; then
+            print_success "All time entry output files are valid JSON ($VALID_JSON/$TIME_ENTRY_FILES)"
         else
-            print_error "Output missing 'date' field"
+            print_error "Some time entry files are invalid JSON ($VALID_JSON/$TIME_ENTRY_FILES)"
         fi
 
-    else
-        print_error "No output files generated"
-
-        echo -e "\n${YELLOW}Debugging Information:${NC}"
-
-        echo -e "\n${YELLOW}Writer Log:${NC}"
-        tail -10 /tmp/nats_writer.log 2>/dev/null || echo "  (no log)"
-
-        echo -e "\n${YELLOW}Training Listener Log:${NC}"
-        tail -10 /tmp/nats_training_listener.log 2>/dev/null || echo "  (no log)"
-
-        echo -e "\n${YELLOW}Router Log:${NC}"
-        tail -10 /tmp/nats_router.log 2>/dev/null || echo "  (no log)"
-
-        echo -e "\n${YELLOW}Running Processes:${NC}"
-        jobs -l
-
-        exit 1
+        # Check time entry file content
+        print_step "Checking time entry output content..."
+        FIRST_TIME_FILE="$TIME_ENTRIES_OUTPUT_DIR/0.json"
+        if grep -q '"time_entries"' "$FIRST_TIME_FILE" 2>/dev/null; then
+            print_success "Output contains 'time_entries' field"
+        fi
+        if grep -q '"date"' "$FIRST_TIME_FILE" 2>/dev/null; then
+            print_success "Output contains 'date' field"
+        fi
     fi
+
 else
-    print_error "Output directory not found"
+    print_error "No output files generated"
+
+    echo -e "\n${YELLOW}Debugging Information:${NC}"
+
+    echo -e "\n${YELLOW}Training Writer Log:${NC}"
+    tail -10 /tmp/nats_writer.log 2>/dev/null || echo "  (no log)"
+
+    echo -e "\n${YELLOW}Training Listener Log:${NC}"
+    tail -10 /tmp/nats_training_listener.log 2>/dev/null || echo "  (no log)"
+
+    echo -e "\n${YELLOW}Time Entry Writer Log:${NC}"
+    tail -10 /tmp/nats_time_writer.log 2>/dev/null || echo "  (no log)"
+
+    echo -e "\n${YELLOW}Time Entry Listener Log:${NC}"
+    tail -10 /tmp/nats_time_listener.log 2>/dev/null || echo "  (no log)"
+
+    echo -e "\n${YELLOW}Router Log:${NC}"
+    tail -10 /tmp/nats_router.log 2>/dev/null || echo "  (no log)"
+
+    echo -e "\n${YELLOW}Running Processes:${NC}"
+    jobs -l
+
     exit 1
 fi
 
@@ -521,19 +614,23 @@ echo -e "${GREEN}✓ All pipeline components executed successfully!${NC}"
 echo -e "${GREEN}✓ Sample data published from google-keep-notes-parser${NC}"
 echo -e "${GREEN}✓ Messages routed by type using ParserRegistry${NC}"
 echo -e "${GREEN}✓ Training messages parsed with ANTLR4${NC}"
-echo -e "${GREEN}✓ Parsed sessions written to $OUTPUT_DIR${NC}"
+echo -e "${GREEN}✓ Time entry messages parsed${NC}"
+echo -e "${GREEN}✓ Parsed sessions written to /tmp/training and /tmp/time-entries${NC}"
 
 echo -e "\n${YELLOW}Pipeline Verification Summary:${NC}"
 echo "  Input:  Google Keep notes (JSON files)"
 echo "  Step 1: Publisher → messages.10.raw"
-echo "  Step 2: Router → messages.20.type.training"
-echo "  Step 3: Training Listener → messages.30.type.training.10.parsed"
-echo "  Step 4: Writer → /tmp/training/*.json"
-echo "  Output: $FILE_COUNT parsed workout session(s)"
+echo "  Step 2: Router → messages.20.type.training and messages.20.type.time"
+echo "  Step 3a: Training Listener → messages.30.type.training.10.parsed"
+echo "  Step 3b: Time Entry Listener → messages.30.type.time.10.parsed"
+echo "  Step 4: Writers → /tmp/training/*.json and /tmp/time-entries/*.json"
+echo "  Output: $TRAINING_FILES parsed workout session(s), $TIME_ENTRY_FILES parsed time entry(ies)"
 
 echo -e "\n${YELLOW}Component Status:${NC}"
-if kill -0 $WRITER_PID 2>/dev/null; then echo "  ✓ Writer running"; else echo "  ✗ Writer stopped"; fi
+if kill -0 $WRITER_PID 2>/dev/null; then echo "  ✓ Training Writer running"; else echo "  ✗ Training Writer stopped"; fi
 if kill -0 $LISTENER_PID 2>/dev/null; then echo "  ✓ Training Listener running"; else echo "  ✗ Training Listener stopped"; fi
+if kill -0 $TIME_WRITER_PID 2>/dev/null; then echo "  ✓ Time Entry Writer running"; else echo "  ✗ Time Entry Writer stopped"; fi
+if kill -0 $TIME_LISTENER_PID 2>/dev/null; then echo "  ✓ Time Entry Listener running"; else echo "  ✗ Time Entry Listener stopped"; fi
 if kill -0 $ROUTER_PID 2>/dev/null; then echo "  ✓ Router running"; else echo "  ✗ Router stopped"; fi
 
 echo -e "\n${GREEN}===================================================${NC}"

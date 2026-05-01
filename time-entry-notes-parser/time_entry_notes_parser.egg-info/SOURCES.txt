@@ -1,0 +1,10 @@
+pyproject.toml
+./src/__init__.py
+./src/time_entry_parser.py
+tests/test_time_entry_parser.py
+time_entry_notes_parser.egg-info/PKG-INFO
+time_entry_notes_parser.egg-info/SOURCES.txt
+time_entry_notes_parser.egg-info/dependency_links.txt
+time_entry_notes_parser.egg-info/entry_points.txt
+time_entry_notes_parser.egg-info/requires.txt
+time_entry_notes_parser.egg-info/top_level.txt

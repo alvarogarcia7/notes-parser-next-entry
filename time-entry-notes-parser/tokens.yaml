@@ -1,0 +1,27 @@
+start_keywords:
+  - start
+
+end_keywords:
+  - stop
+  - end
+  - fin
+
+continue_keywords:
+  - cont
+  - continue
+
+work_projects:
+  - work
+  - cms
+  - meeting
+  - setup
+  - code
+  - development
+
+personal_projects:
+  - gym
+  - breakfast
+  - shower
+  - commute
+  - toilet
+  - stop

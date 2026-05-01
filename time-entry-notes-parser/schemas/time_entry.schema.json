@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Time Entry Schema",
+  "description": "Schema for structured time-tracking data extracted from notes with time codes",
+  "type": "object",
+  "properties": {
+    "note_id": {
+      "type": "string",
+      "description": "Unique identifier of the note"
+    },
+    "title": {
+      "type": "string",
+      "description": "Title of the time-tracking note"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of the time entries (YYYY-MM-DD) - from the first entry"
+    },
+    "created": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Date and time when the note was created"
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Date and time when the note was last updated"
+    },
+    "time_entries": {
+      "type": "array",
+      "description": "List of time entries sorted chronologically",
+      "items": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "description": "Full timestamp of the entry (YYYY-MM-DDTHH:MM:SS or HH:MM:SS)"
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([0-1][0-9]|2[0-3]):[0-5][0-9]$",
+            "description": "Time in HH:MM format (24-hour)"
+          },
+          "end_time": {
+            "type": "string",
+            "pattern": "^([0-1][0-9]|2[0-3]):[0-5][0-9]$",
+            "description": "End time for continuation entries (HH:MM format, 24-hour)"
+          },
+          "duration": {
+            "type": "integer",
+            "description": "Duration in minutes for continuation entries"
+          },
+          "date": {
+            "type": "string",
+            "description": "Date of the entry (YYYY-MM-DD)"
+          },
+          "activity": {
+            "type": "string",
+            "description": "Description of the activity"
+          },
+          "main_activity": {
+            "type": "string",
+            "description": "Main activity component extracted from activity string"
+          },
+          "sub_activity": {
+            "type": "string",
+            "description": "Sub-activity component extracted from activity string (empty if not present)"
+          },
+          "project_type": {
+            "type": "string",
+            "enum": ["work", "personal"],
+            "description": "Classification of the activity as work or personal"
+          },
+          "project": {
+            "type": "string",
+            "description": "Specific project name (e.g., 'stop' for end of day activities)"
+          },
+          "raw_line": {
+            "type": "string",
+            "description": "Original text line from the note"
+          }
+        },
+        "required": ["timestamp", "time", "activity", "main_activity", "sub_activity", "project_type", "raw_line"]
+      }
+    },
+    "raw_text": {
+      "type": "string",
+      "description": "Original raw text of the note"
+    },
+    "warnings": {
+      "type": "array",
+      "description": "List of parsing warnings",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["note_id", "title", "date", "created", "time_entries", "raw_text", "warnings"]
+}
