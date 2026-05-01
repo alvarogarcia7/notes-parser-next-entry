@@ -6,8 +6,8 @@ Test the entire NATS pipeline end-to-end
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NATS_URL="nats://localhost:4222"
-NATS_PORT=4222
+NATS_PORT=${NATS_PORT:-4222}
+NATS_URL=${NATS_URL:-"nats://localhost:$NATS_PORT"}
 
 # Colors for output
 RED='\033[0;31m'
