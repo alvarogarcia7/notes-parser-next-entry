@@ -1,4 +1,4 @@
-.PHONY: help up down status nats-up nats-down listener-time listener-training listener-hn listener-next writer-time writer-training writer-hn writer-next publisher clean logs
+.PHONY: help up down status nats-up nats-down listener-time listener-training listener-hn listener-next writer-time writer-training writer-hn writer-next publisher notes-exporter-publisher clean logs
 
 # Colors for output
 GREEN = \033[0;32m
@@ -70,8 +70,9 @@ help:
 	@echo "  $(YELLOW)writer-hn$(NC)         Start HackerNews writer"
 	@echo "  $(YELLOW)writer-next$(NC)       Start Next entry writer"
 	@echo ""
-	@echo "$(GREEN)Publisher:$(NC)"
-	@echo "  $(YELLOW)publisher$(NC)        Start Google Keep notes publisher"
+	@echo "$(GREEN)Publishers:$(NC)"
+	@echo "  $(YELLOW)publisher$(NC)                  Start Google Keep notes publisher"
+	@echo "  $(YELLOW)notes-exporter-publisher$(NC)  Start Apple Notes (notes-exporter) publisher"
 	@echo ""
 	@echo "$(GREEN)Parser Updates:$(NC)"
 	@echo "  $(YELLOW)update-parsers-check$(NC)  Check all parsers for updates"
@@ -200,6 +201,13 @@ publisher: nats-up
 		echo $$! > $(PIDS_FILE)/publisher.pid && \
 		echo "$(GREEN)✓$(NC) Publisher started (PID: $$!)"
 
+notes-exporter-publisher: nats-up
+	@echo "$(GREEN)▶$(NC) Starting Apple Notes (notes-exporter) publisher..."
+	@mkdir -p $(PIDS_FILE)
+	@bash $(shell pwd)/notes-exporter/bin/start.sh > /tmp/notes-exporter-publisher.log 2>&1 & \
+		echo $$! > $(PIDS_FILE)/notes-exporter-publisher.pid && \
+		echo "$(GREEN)✓$(NC) Notes-exporter publisher started (PID: $$!)"
+
 # ============================================================================
 # Convenience Targets - Groups
 # ============================================================================
@@ -288,7 +296,7 @@ next: nats-up listener-next writer-next
 # System Control Targets
 # ============================================================================
 
-up: nats-up listener-time listener-training listener-next writer-time writer-training writer-next publisher
+up: nats-up listener-time listener-training listener-next writer-time writer-training writer-next publisher notes-exporter-publisher
 	@echo ""
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║                    System Started                          ║$(NC)"
@@ -300,6 +308,7 @@ up: nats-up listener-time listener-training listener-next writer-time writer-tra
 	@echo "  $(GREEN)✓$(NC) Training listener & writer"
 	@echo "  $(GREEN)✓$(NC) Next entry listener & writer"
 	@echo "  $(GREEN)✓$(NC) Google Keep publisher"
+	@echo "  $(GREEN)✓$(NC) Apple Notes (notes-exporter) publisher"
 	@echo ""
 	@echo "$(GREEN)Check logs:$(NC)"
 	@echo "  make logs"
@@ -331,12 +340,16 @@ down:
 	done
 	@echo "$(GREEN)✓$(NC) Writers stopped"
 	@echo ""
-	@echo "$(YELLOW)Stopping publisher...$(NC)"
+	@echo "$(YELLOW)Stopping publishers...$(NC)"
 	@if [ -f "$(PIDS_FILE)/publisher.pid" ]; then \
 		kill $$(cat $(PIDS_FILE)/publisher.pid) 2>/dev/null || true; \
 		rm -f $(PIDS_FILE)/publisher.pid; \
 	fi
-	@echo "$(GREEN)✓$(NC) Publisher stopped"
+	@if [ -f "$(PIDS_FILE)/notes-exporter-publisher.pid" ]; then \
+		kill $$(cat $(PIDS_FILE)/notes-exporter-publisher.pid) 2>/dev/null || true; \
+		rm -f $(PIDS_FILE)/notes-exporter-publisher.pid; \
+	fi
+	@echo "$(GREEN)✓$(NC) Publishers stopped"
 	@echo ""
 	@echo "$(YELLOW)Stopping NATS server...$(NC)"
 	@$(MAKE) nats-down
@@ -384,16 +397,26 @@ status:
 		fi; \
 	done
 	@echo ""
-	@echo "$(BLUE)Publisher:$(NC)"
+	@echo "$(BLUE)Publishers:$(NC)"
 	@if [ -f "$(PIDS_FILE)/publisher.pid" ]; then \
 		pid=$$(cat $(PIDS_FILE)/publisher.pid); \
 		if kill -0 $$pid 2>/dev/null; then \
-			echo "  $(GREEN)✓$(NC) publisher (PID: $$pid)"; \
+			echo "  $(GREEN)✓$(NC) google-keep-publisher (PID: $$pid)"; \
 		else \
-			echo "  $(RED)✗$(NC) publisher (PID: $$pid) - DEAD"; \
+			echo "  $(RED)✗$(NC) google-keep-publisher (PID: $$pid) - DEAD"; \
 		fi; \
 	else \
-		echo "  $(RED)✗$(NC) Not started"; \
+		echo "  $(RED)✗$(NC) google-keep-publisher - Not started"; \
+	fi
+	@if [ -f "$(PIDS_FILE)/notes-exporter-publisher.pid" ]; then \
+		pid=$$(cat $(PIDS_FILE)/notes-exporter-publisher.pid); \
+		if kill -0 $$pid 2>/dev/null; then \
+			echo "  $(GREEN)✓$(NC) notes-exporter-publisher (PID: $$pid)"; \
+		else \
+			echo "  $(RED)✗$(NC) notes-exporter-publisher (PID: $$pid) - DEAD"; \
+		fi; \
+	else \
+		echo "  $(RED)✗$(NC) notes-exporter-publisher - Not started"; \
 	fi
 	@echo ""
 
@@ -414,8 +437,9 @@ logs:
 	@echo "  Listener: tail -f /tmp/listener-next.log"
 	@echo "  Writer:   tail -f /tmp/writer-next.log"
 	@echo ""
-	@echo "$(YELLOW)Publisher:$(NC)"
-	@echo "  tail -f /tmp/publisher.log"
+	@echo "$(YELLOW)Publishers:$(NC)"
+	@echo "  Google Keep:  tail -f /tmp/publisher.log"
+	@echo "  Notes-export: tail -f /tmp/notes-exporter-publisher.log"
 	@echo ""
 
 # ============================================================================
@@ -425,7 +449,7 @@ logs:
 clean: down
 	@echo "$(GREEN)▶$(NC) Cleaning up..."
 	@rm -rf $(PIDS_FILE)
-	@rm -f /tmp/listener-*.log /tmp/writer-*.log /tmp/publisher.log
+	@rm -f /tmp/listener-*.log /tmp/writer-*.log /tmp/publisher.log /tmp/notes-exporter-publisher.log
 	@echo "$(GREEN)✓$(NC) Cleanup complete"
 
 # ============================================================================
