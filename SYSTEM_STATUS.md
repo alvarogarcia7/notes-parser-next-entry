@@ -252,3 +252,115 @@ The system is **✅ complete, tested, and ready for use**. All components have m
 ---
 **Last Updated**: 2026-05-02  
 **System Status**: Fully Operational
+
+## Recent Addition: Message Schema Validation (2026-05-02)
+
+### Overview
+Added comprehensive schema validation for `messages.10.raw` topic to ensure all messages conform to expected structure before routing.
+
+### Components Added
+
+**message_schema.py** (365 lines)
+- JSON Schema-like definitions for messages.10.raw
+- Field validation functions (required, optional, type checking)
+- Date format validation (YYYY-MM-DD)
+- Detailed error messages for debugging
+
+**Router.py Updates**
+- Import and use schema validation
+- Validate all messages before routing
+- Log validation errors with message preview
+- Reject invalid messages to prevent errors
+
+**test_message_schema.py** (188 lines)
+- 10 comprehensive test cases
+- 100% pass rate
+- Tests all validation rules:
+  - Google Keep messages
+  - Apple Notes messages
+  - Missing required fields
+  - Invalid types
+  - Enum validation (source field)
+  - Date format validation
+  - Null values (allowed fields)
+
+**MESSAGE_SCHEMA.md** (Complete documentation)
+- Schema definition with examples
+- Field descriptions and types
+- Validation rules
+- Examples for Google Keep and Apple Notes
+- Router processing workflow
+- Guide for adding new source types
+
+### Message Structure
+
+Messages on messages.10.raw now validated with:
+```json
+{
+  "id": "uuid",                      // Required
+  "source": "google-keep|apple-notes", // Optional
+  "note": {                          // Required
+    "id": "string|number",           // Required
+    "title": "string",               // Required
+    "text": "string",                // Optional
+    "timestamps": {...}              // Optional
+  },
+  "filename": "string",              // Optional (Apple Notes)
+  "date": "YYYY-MM-DD|null"         // Optional (from date extraction)
+}
+```
+
+### Validation Rules
+
+✅ All required fields present
+✅ All fields have correct types
+✅ Source enum values (google-keep, apple-notes)
+✅ Date format must be YYYY-MM-DD
+✅ Note.id and note.title are required
+✅ Null values allowed for optional fields
+
+### Test Results
+
+```
+Message Schema Validation: 10/10 tests pass ✅
+- Valid Google Keep message ✓
+- Valid Apple Notes message ✓
+- Message without optional fields ✓
+- Missing required fields ✓
+- Type validation ✓
+- Source enum validation ✓
+- Date format validation ✓
+- Null value handling ✓
+```
+
+### Integration
+
+Router validates every message on messages.10.raw:
+1. Message arrives from publisher
+2. JSON decoded
+3. Schema validated
+4. If valid → routed to type-specific topic
+5. If invalid → logged, rejected (prevents downstream errors)
+
+### Benefits
+
+- **Data Quality**: Ensures valid messages reach parsers
+- **Error Detection**: Catches malformed messages early
+- **Debugging**: Detailed error messages for troubleshooting
+- **Maintainability**: Schema documents expected structure
+- **Extensibility**: Easy to add new message types
+
+### File Locations
+
+- Schema definition: `project-router/nats-poc/subscriber-python/src/nats_subscriber/message_schema.py`
+- Router integration: `project-router/nats-poc/subscriber-python/src/nats_subscriber/router.py`
+- Tests: `project-router/nats-poc/subscriber-python/tests/test_message_schema.py`
+- Documentation: `project-router/nats-poc/subscriber-python/docs/MESSAGE_SCHEMA.md`
+
+### Next Steps
+
+Optional enhancements:
+- [ ] JSON Schema file for tools/IDEs
+- [ ] Prometheus metrics for validation failures
+- [ ] Dead letter queue for rejected messages
+- [ ] Schema versioning support
