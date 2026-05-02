@@ -63,6 +63,16 @@ help:
 	@echo "$(GREEN)Publisher:$(NC)"
 	@echo "  $(YELLOW)publisher$(NC)        Start Google Keep notes publisher"
 	@echo ""
+	@echo "$(GREEN)Parser Updates:$(NC)"
+	@echo "  $(YELLOW)update-parsers-check$(NC)  Check all parsers for updates"
+	@echo "  $(YELLOW)update-parsers-all$(NC)    Update all parsers"
+	@echo "  $(YELLOW)update-time$(NC)           Update time parser"
+	@echo "  $(YELLOW)update-training$(NC)       Update training parser"
+	@echo "  $(YELLOW)update-hn$(NC)             Update HackerNews parser"
+	@echo "  $(YELLOW)update-next$(NC)           Update next parser"
+	@echo "  $(YELLOW)parser-status$(NC)         Show all parser versions"
+	@echo "  $(YELLOW)parser-versions$(NC)       Show version history"
+	@echo ""
 	@echo "$(GREEN)Configuration:$(NC)"
 	@echo "  NATS_URL: $(NATS_URL)"
 	@echo "  NATS_PORT: $(NATS_PORT)"
@@ -347,6 +357,52 @@ setup: env-check
 		echo "$(YELLOW)Setting up virtual environments...$(NC)"; \
 		$(MAKE) install; \
 	fi
+
+# ============================================================================
+# Parser Update Targets
+# ============================================================================
+
+update-parsers-check:
+	@echo "$(BLUE)Checking for parser updates...$(NC)"
+	@bash update-parsers.sh all check
+
+update-parsers-all:
+	@echo "$(BLUE)Updating all parsers...$(NC)"
+	@bash update-parsers.sh all update
+
+update-parser-time:
+	@bash update-parsers.sh time check
+
+update-parser-training:
+	@bash update-parsers.sh training check
+
+update-parser-hn:
+	@bash update-parsers.sh hn check
+
+update-parser-next:
+	@bash update-parsers.sh next check
+
+update-time:
+	@echo "$(BLUE)Updating time parser...$(NC)"
+	@bash update-parsers.sh time update
+
+update-training:
+	@echo "$(BLUE)Updating training parser...$(NC)"
+	@bash update-parsers.sh training update
+
+update-hn:
+	@echo "$(BLUE)Updating HackerNews parser...$(NC)"
+	@bash update-parsers.sh hn update
+
+update-next:
+	@echo "$(BLUE)Updating next parser...$(NC)"
+	@bash update-parsers.sh next update
+
+parser-status:
+	@bash update-parsers.sh all status
+
+parser-versions:
+	@bash update-parsers.sh versions
 
 # Default target
 .DEFAULT_GOAL := help
