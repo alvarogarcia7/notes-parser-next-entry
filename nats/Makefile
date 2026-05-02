@@ -1,4 +1,4 @@
-.PHONY: help up down status nats-up nats-down listener-time listener-training listener-hn listener-next writer-time writer-training writer-hn writer-next publisher notes-exporter-publisher clean logs
+.PHONY: help up down status nats-up nats-down nats-status gen-certs listener-time listener-training listener-hn listener-next writer-time writer-training writer-hn writer-next publisher notes-exporter-publisher clean logs
 
 # Colors for output
 GREEN = \033[0;32m
@@ -15,15 +15,17 @@ MAKEFLAGS += --no-builtin-rules
 # Load environment from .env if it exists
 ifneq (,$(wildcard .env))
 	include .env
-	export NATS_URL
-	export NATS_PORT
-	export CERTS_DIR
 endif
 
-# Default values
+# Default values (always set and export)
 NATS_URL ?= tls://localhost:4222
 NATS_PORT ?= 4222
 CERTS_DIR ?= $(shell pwd)/certs
+
+# Always export for subprocesses
+export NATS_URL
+export NATS_PORT
+export CERTS_DIR
 
 # Container and process names
 NATS_CONTAINER := nats-server
@@ -91,10 +93,22 @@ help:
 	@echo ""
 
 # ============================================================================
+# Certificate Generation
+# ============================================================================
+
+gen-certs:
+	@if [ ! -f "$(CERTS_DIR)/rootCA.pem" ]; then \
+		echo "$(YELLOW)Generating TLS certificates...$(NC)"; \
+		bash $(shell pwd)/gen-certs.sh; \
+	else \
+		echo "$(GREEN)✓$(NC) Certificates already exist"; \
+	fi
+
+# ============================================================================
 # NATS Server Targets
 # ============================================================================
 
-nats-up:
+nats-up: gen-certs
 	@echo "$(GREEN)▶$(NC) Starting NATS server..."
 	@if docker ps --format "{{.Names}}" | grep -q "^$(NATS_CONTAINER)$$"; then \
 		echo "$(YELLOW)⚠$(NC) NATS container already running"; \
