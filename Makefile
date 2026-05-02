@@ -8,7 +8,7 @@ PARSERS_DIR := parsers
 .PHONY: nats-up nats-down nats-status
 .PHONY: listener listener-time listener-training listener-hn listener-next
 .PHONY: writer writer-time writer-training writer-hn writer-next
-.PHONY: publisher
+.PHONY: publisher notes-exporter-publisher
 .PHONY: time training hn next
 .PHONY: update-parsers-check update-parsers-all update-parser-time update-parser-training update-parser-hn update-parser-next
 .PHONY: update-time update-training update-hn update-next
@@ -39,7 +39,8 @@ help:
 	@echo "Individual Components:"
 	@echo "  make listener        - Start all listeners"
 	@echo "  make writer          - Start all writers"
-	@echo "  make publisher       - Start Google Keep publisher"
+	@echo "  make publisher              - Start Google Keep publisher"
+	@echo "  make notes-exporter-publisher - Start Apple Notes (notes-exporter) publisher"
 	@echo ""
 	@echo "Parser Updates:"
 	@echo "  make update-parsers-check  - Check all parsers for updates"
@@ -116,6 +117,9 @@ writer-next:
 # Publisher
 publisher:
 	@$(MAKE) -C $(NATS_DIR) publisher
+
+notes-exporter-publisher:
+	@$(MAKE) -C $(NATS_DIR) notes-exporter-publisher
 
 # Parser bundles
 time: nats-up listener-time writer-time
