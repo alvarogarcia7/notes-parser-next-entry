@@ -38,23 +38,33 @@ help:
 	@echo "$(GREEN)Usage:$(NC) make [target]"
 	@echo ""
 	@echo "$(GREEN)System Control:$(NC)"
-	@echo "  $(YELLOW)up$(NC)              Start all components (NATS + listeners + writers + publisher)"
+	@echo "  $(YELLOW)up$(NC)              Start entire system (all parsers + publisher)"
 	@echo "  $(YELLOW)down$(NC)            Stop all running components"
 	@echo "  $(YELLOW)status$(NC)          Show status of all components"
 	@echo "  $(YELLOW)logs$(NC)            Show logs from all background processes"
 	@echo "  $(YELLOW)clean$(NC)           Remove all process files and cleanup"
 	@echo ""
+	@echo "$(GREEN)Quick Start (Parser Bundles):$(NC)"
+	@echo "  $(YELLOW)time$(NC)             Start NATS + time listener + writer"
+	@echo "  $(YELLOW)training$(NC)         Start NATS + training listener + writer"
+	@echo "  $(YELLOW)hn$(NC)               Start NATS + HackerNews listener + writer"
+	@echo "  $(YELLOW)next$(NC)             Start NATS + next listener + writer"
+	@echo ""
+	@echo "$(GREEN)Component Groups:$(NC)"
+	@echo "  $(YELLOW)listeners$(NC)        Start all listeners (time, training, next)"
+	@echo "  $(YELLOW)writers$(NC)          Start all writers (time, training, next)"
+	@echo ""
 	@echo "$(GREEN)NATS Server:$(NC)"
 	@echo "  $(YELLOW)nats-up$(NC)         Start NATS server in Docker"
 	@echo "  $(YELLOW)nats-down$(NC)       Stop NATS server"
 	@echo ""
-	@echo "$(GREEN)Listeners (depend on nats-up):$(NC)"
+	@echo "$(GREEN)Individual Listeners (depend on nats-up):$(NC)"
 	@echo "  $(YELLOW)listener-time$(NC)     Start time entry listener"
 	@echo "  $(YELLOW)listener-training$(NC) Start training listener"
 	@echo "  $(YELLOW)listener-hn$(NC)       Start HackerNews listener"
 	@echo "  $(YELLOW)listener-next$(NC)     Start Next entry listener"
 	@echo ""
-	@echo "$(GREEN)Writers:$(NC)"
+	@echo "$(GREEN)Individual Writers:$(NC)"
 	@echo "  $(YELLOW)writer-time$(NC)       Start time entry writer"
 	@echo "  $(YELLOW)writer-training$(NC)   Start training writer"
 	@echo "  $(YELLOW)writer-hn$(NC)         Start HackerNews writer"
@@ -189,6 +199,90 @@ publisher: nats-up
 		python3 $(shell pwd)/google-keep-notes-parser/nats_publisher.py > /tmp/publisher.log 2>&1 & \
 		echo $$! > $(PIDS_FILE)/publisher.pid && \
 		echo "$(GREEN)✓$(NC) Publisher started (PID: $$!)"
+
+# ============================================================================
+# Convenience Targets - Groups
+# ============================================================================
+
+listeners: listener-time listener-training listener-next
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║                All Listeners Started                       ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
+
+writers: writer-time writer-training writer-next
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║                  All Writers Started                       ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
+
+# ============================================================================
+# Convenience Targets - Parser Bundles (NATS + Listener + Writer)
+# ============================================================================
+
+time: nats-up listener-time writer-time
+	@echo ""
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║              Time Entry Pipeline Started                   ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(GREEN)Active Components:$(NC)"
+	@echo "  $(GREEN)✓$(NC) NATS server (port $(NATS_PORT))"
+	@echo "  $(GREEN)✓$(NC) Time entry listener"
+	@echo "  $(GREEN)✓$(NC) Time entry writer"
+	@echo ""
+	@echo "$(GREEN)Logs:$(NC)"
+	@echo "  tail -f /tmp/listener-time.log"
+	@echo "  tail -f /tmp/writer-time.log"
+	@echo ""
+	@echo "$(GREEN)Stop:$(NC)"
+	@echo "  make down"
+	@echo ""
+
+training: nats-up listener-training writer-training
+	@echo ""
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║              Training Pipeline Started                     ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(GREEN)Active Components:$(NC)"
+	@echo "  $(GREEN)✓$(NC) NATS server (port $(NATS_PORT))"
+	@echo "  $(GREEN)✓$(NC) Training listener (ANTLR4)"
+	@echo "  $(GREEN)✓$(NC) Training writer"
+	@echo ""
+	@echo "$(GREEN)Logs:$(NC)"
+	@echo "  tail -f /tmp/listener-training.log"
+	@echo "  tail -f /tmp/writer-training.log"
+	@echo ""
+	@echo "$(GREEN)Stop:$(NC)"
+	@echo "  make down"
+	@echo ""
+
+hn: nats-up listener-hn writer-hn
+	@echo ""
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║             HackerNews Pipeline Started                    ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Note:$(NC) HackerNews parser not yet implemented"
+	@echo ""
+
+next: nats-up listener-next writer-next
+	@echo ""
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║               Next Entry Pipeline Started                  ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(GREEN)Active Components:$(NC)"
+	@echo "  $(GREEN)✓$(NC) NATS server (port $(NATS_PORT))"
+	@echo "  $(GREEN)✓$(NC) Next entry listener"
+	@echo "  $(GREEN)✓$(NC) Next entry writer"
+	@echo ""
+	@echo "$(GREEN)Logs:$(NC)"
+	@echo "  tail -f /tmp/listener-next.log"
+	@echo "  tail -f /tmp/writer-next.log"
+	@echo ""
+	@echo "$(GREEN)Stop:$(NC)"
+	@echo "  make down"
+	@echo ""
 
 # ============================================================================
 # System Control Targets
