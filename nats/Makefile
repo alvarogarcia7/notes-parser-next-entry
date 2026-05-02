@@ -1,4 +1,4 @@
-.PHONY: help up down status nats-up nats-down nats-status gen-certs listener-time listener-training listener-hn listener-next writer-time writer-training writer-hn writer-next publisher notes-exporter-publisher clean logs
+.PHONY: help up down status nats-up nats-down nats-status gen-certs env-check listener-time listener-training listener-hn listener-next writer-time writer-training writer-hn writer-next publisher notes-exporter-publisher clean logs listeners writers time training hn next install setup update-parsers-check update-parsers-all update-parser-time update-parser-training update-parser-hn update-parser-next update-time update-training update-hn update-next parser-status parser-versions
 
 # Colors for output
 GREEN = \033[0;32m
@@ -34,17 +34,21 @@ PIDS_FILE := ./.make-pids
 # Help target
 help:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║             NATS Pipeline Control Plane                    ║$(NC)"
+	@echo "$(BLUE)║             NATS Pipeline Control Plane (mTLS Enabled)      ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@echo "$(GREEN)Usage:$(NC) make [target]"
 	@echo ""
 	@echo "$(GREEN)System Control:$(NC)"
-	@echo "  $(YELLOW)up$(NC)              Start entire system (all parsers + publisher)"
+	@echo "  $(YELLOW)up$(NC)              Start entire system (certs + NATS + publishers/listeners)"
 	@echo "  $(YELLOW)down$(NC)            Stop all running components"
 	@echo "  $(YELLOW)status$(NC)          Show status of all components"
 	@echo "  $(YELLOW)logs$(NC)            Show logs from all background processes"
 	@echo "  $(YELLOW)clean$(NC)           Remove all process files and cleanup"
+	@echo ""
+	@echo "$(GREEN)TLS/Security:$(NC)"
+	@echo "  $(YELLOW)gen-certs$(NC)       Generate TLS certificates (auto-run on make up)"
+	@echo "  $(YELLOW)env-check$(NC)       Verify TLS configuration (read MTLS_SETUP.md for details)"
 	@echo ""
 	@echo "$(GREEN)Quick Start (Parser Bundles):$(NC)"
 	@echo "  $(YELLOW)time$(NC)             Start NATS + time listener + writer"
@@ -87,9 +91,13 @@ help:
 	@echo "  $(YELLOW)parser-versions$(NC)       Show version history"
 	@echo ""
 	@echo "$(GREEN)Configuration:$(NC)"
-	@echo "  NATS_URL: $(NATS_URL)"
+	@echo "  NATS_URL: $(NATS_URL) (mTLS enabled)"
 	@echo "  NATS_PORT: $(NATS_PORT)"
 	@echo "  CERTS_DIR: $(CERTS_DIR)"
+	@echo "  TLS: ✓ Mutual TLS (mTLS) enabled"
+	@echo ""
+	@echo "$(GREEN)More Information:$(NC)"
+	@echo "  Read: nats/MTLS_SETUP.md for security, troubleshooting, and renewal"
 	@echo ""
 
 # ============================================================================
