@@ -54,6 +54,10 @@ fi
 PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
 print_success "Python $PYTHON_VERSION found"
 
+# Set repo root (this script is in nats/ subdirectory)
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
 # Initialize git submodules
 print_step "Initializing Git submodules..."
 git submodule update --init --recursive
@@ -61,7 +65,7 @@ print_success "Submodules initialized"
 
 # Find available ports
 print_step "Finding available ports..."
-NATS_PORT=$(bash find-available-port.sh 4222)
+NATS_PORT=$(bash "$REPO_ROOT/nats/find-available-port.sh" 4222)
 if [ $? -ne 0 ]; then
     print_error "Could not find available port for NATS"
     exit 1
@@ -70,7 +74,7 @@ print_success "Found available NATS port: $NATS_PORT"
 
 # Create .env file with configuration
 print_step "Creating environment configuration..."
-ENV_FILE=".env"
+ENV_FILE="$REPO_ROOT/.env"
 
 cat > "$ENV_FILE" << EOF
 # NATS Configuration (auto-configured by install-mac.sh)
@@ -78,7 +82,7 @@ NATS_URL=tls://localhost:$NATS_PORT
 NATS_PORT=$NATS_PORT
 
 # TLS Certificate Directory
-CERTS_DIR=\$(pwd)/certs
+CERTS_DIR=$REPO_ROOT/nats/certs
 
 # Docker Configuration
 DOCKER_REGISTRY=docker.io
@@ -92,7 +96,13 @@ print_step "Setting up Python virtual environments..."
 
 setup_venv() {
     local project=$1
-    local venv_path="$project/.venv"
+    local project_path="$REPO_ROOT/$project"
+    local venv_path="$project_path/.venv"
+
+    if [ ! -d "$project_path" ]; then
+        print_warning "$project directory not found at $project_path"
+        return
+    fi
 
     if [ -d "$venv_path" ]; then
         print_warning "$project virtual environment already exists"
@@ -107,11 +117,11 @@ setup_venv() {
     pip install --upgrade pip setuptools wheel > /dev/null 2>&1
 
     # Install project dependencies
-    if [ -f "$project/requirements.txt" ]; then
-        pip install -r "$project/requirements.txt" > /dev/null 2>&1
+    if [ -f "$project_path/requirements.txt" ]; then
+        pip install -r "$project_path/requirements.txt" > /dev/null 2>&1
         print_success "Installed dependencies for $project"
-    elif [ -f "$project/pyproject.toml" ]; then
-        pip install -e "$project" > /dev/null 2>&1
+    elif [ -f "$project_path/pyproject.toml" ]; then
+        pip install -e "$project_path" > /dev/null 2>&1
         print_success "Installed $project from pyproject.toml"
     else
         print_warning "No requirements.txt or pyproject.toml found for $project"
@@ -129,30 +139,32 @@ setup_venv "project-router"
 
 # Update nats-server.conf with dynamic port
 print_step "Configuring NATS server for port $NATS_PORT..."
-if [ -f "nats-server.conf" ]; then
+NATS_CONF="$REPO_ROOT/nats/nats-server.conf"
+if [ -f "$NATS_CONF" ]; then
     # Create backup
-    cp nats-server.conf nats-server.conf.backup
+    cp "$NATS_CONF" "$NATS_CONF.backup"
 
     # Update port (handles both listen and http directives)
-    sed -i.bak "s/listen: 0.0.0.0:[0-9]\+/listen: 0.0.0.0:$NATS_PORT/" nats-server.conf
-    sed -i.bak "s/http: 0.0.0.0:[0-9]\+/http: 0.0.0.0:$((NATS_PORT + 4000))/" nats-server.conf
-    rm -f nats-server.conf.bak
+    sed -i.bak "s/listen: 0.0.0.0:[0-9]\+/listen: 0.0.0.0:$NATS_PORT/" "$NATS_CONF"
+    sed -i.bak "s/http: 0.0.0.0:[0-9]\+/http: 0.0.0.0:$((NATS_PORT + 4000))/" "$NATS_CONF"
+    rm -f "$NATS_CONF.bak"
 
     print_success "Updated nats-server.conf"
 fi
 
 # Generate TLS certificates if they don't exist
 print_step "Checking TLS certificates..."
-if [ ! -f "certs/rootCA.pem" ]; then
+CERTS_DIR="$REPO_ROOT/nats/certs"
+if [ ! -f "$CERTS_DIR/rootCA.pem" ]; then
     print_step "Generating TLS certificates..."
-    bash gen-certs.sh
+    bash "$REPO_ROOT/nats/gen-certs.sh"
     print_success "TLS certificates generated"
 else
     print_success "TLS certificates already exist"
 fi
 
 # Source the .env file for this session
-source ".env"
+source "$ENV_FILE"
 
 # Summary
 print_step "Installation complete!"
@@ -167,11 +179,11 @@ echo -e "${GREEN}Next steps:${NC}"
 echo "  1. Source environment variables:"
 echo "     source .env"
 echo ""
-echo "  2. Run NATS server with Docker:"
-echo "     docker run -d --name nats-server -p $NATS_PORT:4222 -v \$(pwd)/certs:/certs:ro -v \$(pwd)/nats-server.conf:/etc/nats/nats-server.conf:ro nats:latest -c /etc/nats/nats-server.conf"
+echo "  2. Start the system:"
+echo "     make up"
 echo ""
-echo "  3. Start the pipelines:"
-echo "     python3 google-keep-notes-parser/nats_publisher.py"
+echo "  3. Monitor system status:"
+echo "     make status"
 echo ""
 echo -e "${YELLOW}Note:${NC} Each project has a virtual environment in .venv/"
 echo "To use a specific project's environment:"
