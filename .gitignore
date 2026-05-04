@@ -1,0 +1,11 @@
+
+# Unrelated repository directories (should not be submodules of notes-parser-next-entry)
+google-keep-notes-parser/
+link-collection-rust/
+notes-exporter/
+notes-router/
+project-router/
+training-parser-antlr4/
+time-entry-notes-parser/
+demo_hn_pipeline_simple.py
+nats_generic_writer.py
