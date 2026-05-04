@@ -21,7 +21,7 @@ Google Keep Notes (JSON files)              Apple Notes
     ┌────┴────┐                            ┌─────┴────┐
     ↓         ↓                            ↓          ↓
 messages.20  messages.20.hn        messages.20     (other types)
-googlenotes   (HN detected)         applenotes
+other.googlenotes   (HN detected)         other.applenotes
               ↓
         [HN Parser]
               ↓
@@ -44,15 +44,18 @@ googlenotes   (HN detected)         applenotes
 ### Stage 2: Standardized Format (After Routing)
 | Topic | Router | Description |
 |-------|--------|-------------|
-| `messages.20.googlenotes` | Google Router | Standardized Google Keep notes |
-| `messages.20.applenotes` | Apple Router | Standardized Apple Notes |
-| `messages.20.hn` | Google/Apple Router | HackerNews-detected notes |
+| `messages.20.other.googlenotes` | Google Router | Standardized Google Keep notes |
+| `messages.20.other.applenotes` | Apple Router | Standardized Apple Notes |
+| `messages.20.hn` | Any Router, format is specific for Type=HN | HackerNews-detected notes |
+| `messages.20.time` | Any Router, Format is specific for Type=Time | Time-detected notes |
+| `messages.20.training` | Any Router, Format is specific for Type=Training | Training-detected notes |
 
 ### Stage 3+: Parsed/Processed Data (Type-Specific)
 | Topic | Parser/Listener | Description |
 |-------|-----------------|-------------|
 | `messages.30.type.hn.10.parsed` | HackerNews Parser | Parsed HackerNews metadata (item ID, URL, links) |
 | `messages.30.type.training.10.parsed` | Training Parser | Parsed workout sessions with exercises |
+| `messages.30.type.time.10.parsed` | Time Parser | Time entries |
 
 ## Components
 
@@ -90,80 +93,23 @@ Reads Apple Notes and publishes to `messages.10.raw.type.applenotes`.
 ### Stage 2: Routers (Standardization & Detection)
 
 #### Google Notes Router
-**File**: `google-keep-notes-parser/nats_router.py`
+**File**: `notes-parser-router/googlenotes_router.py`
 
-Subscribes to `messages.10.raw.type.googlenotes`, detects content type, routes accordingly:
-- **HackerNews** (label "Download-HN" or URL pattern) → `messages.20.hn`
-- **Generic** → `messages.20.googlenotes`
+Subscribes to `messages.10.raw.type.googlenotes`, detects content type, routes to `messages.20.hn`, `messages.20.time`, `messages.20.training`, then the rest to  `messages.20.other.googlenotes`
 
 **Usage**:
 ```bash
-cd google-keep-notes-parser
-python nats_router.py
-```
-
-**Message format**:
-```json
-{
-  "id": "<uuid>",
-  "message_type": "hackernews|googlenotes",
-  "note": {
-    "id": "note-id",
-    "title": "string",
-    "text": "string",
-    "url": "optional",
-    "date": "2026-01-15"
-  },
-  "source": "google-keep"
-}
+cd notes-parser-router
+python googlenotes_router.py
 ```
 
 #### Apple Notes Router
-**File**: `notes-exporter/nats_router.py`
-
-Subscribes to `messages.10.raw.type.applenotes`, routes to `messages.20.applenotes`.
+**File**: `notes-parser-router/applenotes_router.py`
+Subscribes to `messages.10.raw.type.applenotes`, routes to `messages.20.hn`, `messages.20.time`, `messages.20.training`, then the rest to `messages.20.other.applenotes`.
 
 ---
 
 ### Stage 3: Parsers (Type-Specific Processing)
-
-#### HackerNews Parser
-**File**: `google-keep-notes-parser/nats_hn_parser.py`
-
-Subscribes to `messages.20.hn`, extracts HackerNews metadata, publishes to `messages.30.type.hn.10.parsed`.
-
-**Usage**:
-```bash
-cd google-keep-notes-parser
-python nats_hn_parser.py
-```
-
-**Processing**:
-- Extracts HackerNews item ID from URL
-- Collects all HN links from the note
-- Preserves labels and metadata
-
-**Message format**:
-```json
-{
-  "id": "<uuid>",
-  "message_id": "<uuid>",
-  "note_id": "original-note-id",
-  "type": "hackernews",
-  "parsed": {
-    "title": "Ask HN: How do you...",
-    "item_id": "46620990",
-    "url": "https://news.ycombinator.com/item?id=46620990",
-    "description": "note text",
-    "labels": ["AI", "Download-HN"],
-    "hn_links": [
-      { "url": "https://news.ycombinator.com/item?id=46620990", "item_id": "46620990" }
-    ]
-  },
-  "source": "google-keep",
-  "date": "2026-01-15"
-}
-```
 
 #### Training Parser
 **File**: `training-parser-antlr4/nats_training_listener.py`
@@ -197,11 +143,11 @@ Writes any NATS topic to `/tmp/nats/$TOPIC/{N}.json`. Topic-agnostic.
 
 **Usage**:
 ```bash
-NATS_TOPIC=messages.20.googlenotes python nats_generic_writer.py
+NATS_TOPIC=messages.20.other.googlenotes python nats_generic_writer.py
 ```
 
 **Output**:
-- Saves messages from any topic: `/tmp/nats/messages.20.googlenotes/1.json`, etc.
+- Saves messages from any topic: `/tmp/nats/messages.20.other.googlenotes/1.json`, etc.
 - Environment variable `NATS_TOPIC` specifies the subscription topic
 
 #### Training Writer
@@ -294,7 +240,7 @@ export CERTS_DIR=/etc/nats-certs
 python nats_hn_parser.py
 
 # Generic writer for Google Notes
-export NATS_TOPIC=messages.20.googlenotes
+export NATS_TOPIC=messages.20.other.googlenotes
 python nats_generic_writer.py
 ```
 
@@ -309,11 +255,11 @@ All writers follow the same output pattern: `/tmp/nats/$TOPIC/{N}.json`
 ### Generic Writer
 Use `nats_generic_writer.py` for any topic by setting `NATS_TOPIC`:
 ```bash
-# Write Google Notes (messages.20.googlenotes)
-NATS_TOPIC=messages.20.googlenotes python nats_generic_writer.py
+# Write Google Notes (messages.20.other.googlenotes)
+NATS_TOPIC=messages.20.other.googlenotes python nats_generic_writer.py
 
-# Write Apple Notes (messages.20.applenotes)
-NATS_TOPIC=messages.20.applenotes python nats_generic_writer.py
+# Write Apple Notes (messages.20.other.applenotes)
+NATS_TOPIC=messages.20.other.applenotes python nats_generic_writer.py
 
 # Write HackerNews (alternative to specific writer)
 NATS_TOPIC=messages.30.type.hn.10.parsed python nats_generic_writer.py
