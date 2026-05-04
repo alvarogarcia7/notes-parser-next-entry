@@ -1,55 +1,67 @@
 # NATS Pipeline Implementation
 
-A 4-step NATS messaging pipeline for Google Keep notes processing:
+A multi-stage NATS messaging pipeline for note processing with two-stage routing architecture:
 
-1. **Publisher** — reads Google Keep notes and publishes raw messages
-2. **Router** — routes messages to type-specific topics
-3. **Training Parser** — parses training notes with ANTLR4 and publishes sessions
-4. **Writer** — writes parsed sessions to disk as JSON files
+**Stage 1 (messages.10.raw.type.*)**: Source-specific publishers publish raw notes
+**Stage 2 (messages.20.*)**: Source-specific routers transform to standardized format
+**Stage 3+ (messages.30.*)**: Type-specific parsers extract and structure data
+**Stage N (Writers)**: Persist messages to disk organized by topic
 
 ## Architecture
 
 ```
-Google Keep Notes (JSON files)
-         ↓
-   [Publisher]
-         ↓
-   messages.10.raw  (raw notes from Google Keep)
-         ↓
-   [Router]
-         ↓
-    ┌────┴────┬──────────┬────────────┐
-    ↓         ↓          ↓            ↓
- training   toggl      next          hn
-    ↓
-messages.20.type.training
-         ↓
-[Training Parser Listener]
-         ↓
-messages.30.type.training.10.parsed
-         ↓
-   [Writer]
-         ↓
-  /tmp/training/*.json (parsed workout sessions)
+Google Keep Notes (JSON files)              Apple Notes
+         ↓                                        ↓
+   [Google Publisher]                    [Apple Publisher]
+         ↓                                        ↓
+   messages.10.raw.type.googlenotes    messages.10.raw.type.applenotes
+         ↓                                        ↓
+   [Google Router] ←───────────────────── → [Apple Router]
+         ↓                                        ↓
+    ┌────┴────┐                            ┌─────┴────┐
+    ↓         ↓                            ↓          ↓
+messages.20  messages.20.hn        messages.20     (other types)
+googlenotes   (HN detected)         applenotes
+              ↓
+        [HN Parser]
+              ↓
+        messages.30.type.hn.10.parsed
+              ↓
+        [HN Writer]
+              ↓
+    /tmp/nats/messages.30.type.hn.10.parsed/1.json
+    /tmp/nats/messages.30.type.hn.10.parsed/2.json
 ```
 
 ## NATS Topics
 
-| Topic | Direction | Description |
-|-------|-----------|-------------|
-| `messages.10.raw` | Publisher → Router | Raw Google Keep notes (all types) |
-| `messages.20.type.training` | Router → Training Listener | Training/workout notes |
-| `messages.20.type.toggl` | Router → (future) | Time entry notes |
-| `messages.20.type.next` | Router → (future) | Next task notes |
-| `messages.20.type.hn` | Router → (future) | Hacker News notes |
-| `messages.30.type.training.10.parsed` | Training Listener → Writer | Parsed workout sessions |
+### Stage 1: Raw Message Publishing (Source-Specific)
+| Topic | Source | Description |
+|-------|--------|-------------|
+| `messages.10.raw.type.googlenotes` | Google Keep Publisher | Raw notes from Google Keep |
+| `messages.10.raw.type.applenotes` | Apple Notes Publisher | Raw notes from Apple Notes |
+
+### Stage 2: Standardized Format (After Routing)
+| Topic | Router | Description |
+|-------|--------|-------------|
+| `messages.20.googlenotes` | Google Router | Standardized Google Keep notes |
+| `messages.20.applenotes` | Apple Router | Standardized Apple Notes |
+| `messages.20.hn` | Google/Apple Router | HackerNews-detected notes |
+
+### Stage 3+: Parsed/Processed Data (Type-Specific)
+| Topic | Parser/Listener | Description |
+|-------|-----------------|-------------|
+| `messages.30.type.hn.10.parsed` | HackerNews Parser | Parsed HackerNews metadata (item ID, URL, links) |
+| `messages.30.type.training.10.parsed` | Training Parser | Parsed workout sessions with exercises |
 
 ## Components
 
-### Step 1: Publisher
+### Stage 1: Publishers (Source-Specific)
+
+#### Google Keep Publisher
 **File**: `google-keep-notes-parser/nats_publisher.py`
 
-Reads all JSON note files from a directory and publishes each to `messages.10.raw`.
+Reads JSON note files from a directory and publishes to `messages.10.raw.type.googlenotes`.
 
 **Usage**:
 ```bash
@@ -57,21 +69,32 @@ cd google-keep-notes-parser
 python nats_publisher.py --input-dir sample
 ```
 
-**Arguments**:
-- `--input-dir` — directory containing JSON note files (default: `sample`)
-
 **Message format**:
 ```json
 {
   "id": "<uuid>",
-  "note": { ... raw Google Keep note JSON ... }
+  "note": { ... raw Google Keep note JSON ... },
+  "date": "2026-01-15"
 }
 ```
 
-### Step 2: Router
+#### Apple Notes Publisher
+**File**: `notes-exporter/nats_publisher.py`
+
+Reads Apple Notes and publishes to `messages.10.raw.type.applenotes`.
+
+**Message format**: Same as Google Keep format
+
+---
+
+### Stage 2: Routers (Standardization & Detection)
+
+#### Google Notes Router
 **File**: `google-keep-notes-parser/nats_router.py`
 
-Subscribes to `messages.10.raw`, uses parsers to detect message type, routes to appropriate topic.
+Subscribes to `messages.10.raw.type.googlenotes`, detects content type, routes accordingly:
+- **HackerNews** (label "Download-HN" or URL pattern) → `messages.20.hn`
+- **Generic** → `messages.20.googlenotes`
 
 **Usage**:
 ```bash
@@ -79,90 +102,119 @@ cd google-keep-notes-parser
 python nats_router.py
 ```
 
-**Type Detection**:
-- `TrainingParser` → `messages.20.type.training`
-- `TimeEntryParser` → `messages.20.type.toggl`
-- `NextParser` → `messages.20.type.next`
-- `HackerNewsParser` → `messages.20.type.hn`
-- `GenericNotesParser` → skipped (logged as unrecognized)
+**Message format**:
+```json
+{
+  "id": "<uuid>",
+  "message_type": "hackernews|googlenotes",
+  "note": {
+    "id": "note-id",
+    "title": "string",
+    "text": "string",
+    "url": "optional",
+    "date": "2026-01-15"
+  },
+  "source": "google-keep"
+}
+```
+
+#### Apple Notes Router
+**File**: `notes-exporter/nats_router.py`
+
+Subscribes to `messages.10.raw.type.applenotes`, routes to `messages.20.applenotes`.
+
+---
+
+### Stage 3: Parsers (Type-Specific Processing)
+
+#### HackerNews Parser
+**File**: `google-keep-notes-parser/nats_hn_parser.py`
+
+Subscribes to `messages.20.hn`, extracts HackerNews metadata, publishes to `messages.30.type.hn.10.parsed`.
+
+**Usage**:
+```bash
+cd google-keep-notes-parser
+python nats_hn_parser.py
+```
+
+**Processing**:
+- Extracts HackerNews item ID from URL
+- Collects all HN links from the note
+- Preserves labels and metadata
 
 **Message format**:
 ```json
 {
   "id": "<uuid>",
-  "type": "training",
-  "note": { ... raw Google Keep note JSON ... }
+  "message_id": "<uuid>",
+  "note_id": "original-note-id",
+  "type": "hackernews",
+  "parsed": {
+    "title": "Ask HN: How do you...",
+    "item_id": "46620990",
+    "url": "https://news.ycombinator.com/item?id=46620990",
+    "description": "note text",
+    "labels": ["AI", "Download-HN"],
+    "hn_links": [
+      { "url": "https://news.ycombinator.com/item?id=46620990", "item_id": "46620990" }
+    ]
+  },
+  "source": "google-keep",
+  "date": "2026-01-15"
 }
 ```
 
-### Step 3: Training Parser Listener
+#### Training Parser
 **File**: `training-parser-antlr4/nats_training_listener.py`
 
-Subscribes to `messages.20.type.training`, parses note text with ANTLR4, publishes parsed sessions.
+Subscribes to `messages.20.type.training`, parses with ANTLR4, publishes to `messages.30.type.training.10.parsed`.
+
+---
+
+### Stage N: Writers (Persistence)
+
+#### HackerNews Writer
+**File**: `google-keep-notes-parser/nats_hn_writer.py`
+
+Subscribes to `messages.30.type.hn.10.parsed`, writes to `/tmp/nats/messages.30.type.hn.10.parsed/{N}.json`.
 
 **Usage**:
 ```bash
-cd training-parser-antlr4
-python nats_training_listener.py
-```
-
-**Parsing**:
-- Uses `SessionGrouper.group_by_sessions()` to split text by training sessions
-- Uses `ExerciseParser.parse_sessions()` to parse each session with ANTLR4 grammar
-- Serializes exercises with `serialize_exercise()` from `parser.display`
-
-**Message format**:
-```json
-{
-  "id": "<uuid>",
-  "source_note_id": "<original note id>",
-  "session_index": 0,
-  "workout": {
-    "workout_id": "w_20230414_000000",
-    "type": "set-centric",
-    "date": "2023-04-14",
-    "location": "",
-    "notes": "# Stats: ...",
-    "statistics": {},
-    "exercises": [
-      {
-        "name": "Deadlift",
-        "equipment": "other",
-        "sets": [
-          {
-            "setNumber": 1,
-            "repetitions": 6,
-            "weight": { "amount": 80, "unit": "kg" }
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### Step 4: Writer
-**File**: `training-parser-antlr4/nats_writer.py`
-
-Subscribes to `messages.30.type.training.10.parsed`, writes each to `/tmp/training/<counter>.json`.
-
-**Usage**:
-```bash
-cd training-parser-antlr4
-python nats_writer.py
+cd google-keep-notes-parser
+python nats_hn_writer.py
 ```
 
 **Output**:
-- Creates `/tmp/training/` directory if it doesn't exist
-- Writes each parsed workout session to a numbered JSON file: `0.json`, `1.json`, etc.
-- Each file contains the complete `workout` object from the message
+- Creates `/tmp/nats/messages.30.type.hn.10.parsed/` directory
+- Sequential numbering: `1.json`, `2.json`, `3.json`, etc.
+- Counter maintained in `.counter` file
+
+#### Generic Writer
+**File**: `nats_generic_writer.py` (root directory)
+
+Writes any NATS topic to `/tmp/nats/$TOPIC/{N}.json`. Topic-agnostic.
+
+**Usage**:
+```bash
+NATS_TOPIC=messages.20.googlenotes python nats_generic_writer.py
+```
+
+**Output**:
+- Saves messages from any topic: `/tmp/nats/messages.20.googlenotes/1.json`, etc.
+- Environment variable `NATS_TOPIC` specifies the subscription topic
+
+#### Training Writer
+**File**: `training-parser-antlr4/nats_writer.py`
+
+Subscribes to `messages.30.type.training.10.parsed`, writes to `/tmp/nats/messages.30.type.training.10.parsed/{N}.json`.
 
 ## Quick Start
 
 ### Prerequisites
-- NATS server running (Docker: `docker run -p 4222:4222 nats:latest`)
+- NATS server running with mTLS (or plaintext for testing)
 - Python 3.9+
-- Dependencies installed in both repos
+- TLS certificates in `/tmp/nats-certs/` or configure `CERTS_DIR`
 
 ### Installation
 
@@ -178,60 +230,161 @@ cd training-parser-antlr4
 pip install -e .
 ```
 
+**notes-exporter**:
+```bash
+cd notes-exporter
+pip install -e .
+```
+
 ### Run the Pipeline
 
-Terminal 1 - Start NATS:
+**Terminal 1** — Start NATS (plaintext for testing):
 ```bash
 docker run -p 4222:4222 nats:latest
 ```
 
-Terminal 2 - Start writer (listens for output):
+**Terminal 2** — Start HackerNews Writer:
 ```bash
-cd training-parser-antlr4
-python nats_writer.py
+cd google-keep-notes-parser
+python nats_hn_writer.py
 ```
 
-Terminal 3 - Start training listener:
+**Terminal 3** — Start HackerNews Parser:
 ```bash
-cd training-parser-antlr4
-python nats_training_listener.py
+cd google-keep-notes-parser
+python nats_hn_parser.py
 ```
 
-Terminal 4 - Start router:
+**Terminal 4** — Start Google Notes Router:
 ```bash
 cd google-keep-notes-parser
 python nats_router.py
 ```
 
-Terminal 5 - Start publisher:
+**Terminal 5** — Start Google Keep Publisher:
 ```bash
 cd google-keep-notes-parser
-python nats_publisher.py --input-dir sample
+python nats_publisher.py --input-dir sample/hn
 ```
 
 ### Verify
 
-Check the output:
+Check HackerNews output:
 ```bash
-ls /tmp/training/
-cat /tmp/training/0.json
+ls /tmp/nats/messages.30.type.hn.10.parsed/
+cat /tmp/nats/messages.30.type.hn.10.parsed/1.json
 ```
 
-You should see parsed workout sessions as JSON files.
+You should see parsed HackerNews items with extracted item IDs and URLs.
 
 ## Environment Variables
 
 - `NATS_URL` — NATS server URL (default: `nats://localhost:4222`)
+- `CERTS_DIR` — TLS certificates directory (default: `/tmp/nats-certs`)
+- `NATS_TOPIC` — For generic writer, the topic to subscribe to
 
-**Example**:
+**Examples**:
 ```bash
+# Use custom NATS server
 export NATS_URL=nats://nats.example.com:4222
 python nats_router.py
+
+# Use TLS with certificates
+export CERTS_DIR=/etc/nats-certs
+python nats_hn_parser.py
+
+# Generic writer for Google Notes
+export NATS_TOPIC=messages.20.googlenotes
+python nats_generic_writer.py
+```
+
+## Writer Configuration
+
+All writers follow the same output pattern: `/tmp/nats/$TOPIC/{N}.json`
+
+### Topic-Specific Writers
+- `nats_hn_writer.py` — hardcoded to `messages.30.type.hn.10.parsed`
+- `nats_writer.py` (training) — hardcoded to `messages.30.type.training.10.parsed`
+
+### Generic Writer
+Use `nats_generic_writer.py` for any topic by setting `NATS_TOPIC`:
+```bash
+# Write Google Notes (messages.20.googlenotes)
+NATS_TOPIC=messages.20.googlenotes python nats_generic_writer.py
+
+# Write Apple Notes (messages.20.applenotes)
+NATS_TOPIC=messages.20.applenotes python nats_generic_writer.py
+
+# Write HackerNews (alternative to specific writer)
+NATS_TOPIC=messages.30.type.hn.10.parsed python nats_generic_writer.py
+```
+
+### Output Structure
+- **Directory**: `/tmp/nats/$TOPIC/`
+- **Counter file**: `/tmp/nats/$TOPIC/.counter` (tracks next message number)
+- **Message files**: `/tmp/nats/$TOPIC/1.json`, `/tmp/nats/$TOPIC/2.json`, etc.
+
+Example after processing 3 HackerNews messages:
+```
+/tmp/nats/messages.30.type.hn.10.parsed/
+├── .counter
+├── 1.json
+├── 2.json
+└── 3.json
 ```
 
 ## Message Flow Examples
 
-### Example: Training Note Processing
+### Example 1: HackerNews Note Processing
+
+1. **Publisher** reads `sample/hn/1.json` with HackerNews URL:
+   ```json
+   {
+     "id": "bbbbbbbbbbb.dddddddddddddddd",
+     "title": "Ask HN: How do you safely give LLMs SSHDB access",
+     "text": "https://news.ycombinator.com/item?id=46620990",
+     "labels": ["AI", "Download-HN"]
+   }
+   ```
+
+2. **Publisher** publishes to `messages.10.raw.type.googlenotes`:
+   ```json
+   {
+     "id": "c7fb647b-e37f-42b1-9a21-b3be2ab031e8",
+     "note": { ... above JSON ... },
+     "date": "2026-01-15"
+   }
+   ```
+
+3. **Router** detects HackerNews (via label or URL pattern), publishes to `messages.20.hn`:
+   ```json
+   {
+     "id": "c7fb647b-e37f-42b1-9a21-b3be2ab031e8",
+     "message_type": "hackernews",
+     "note": { ... },
+     "source": "google-keep"
+   }
+   ```
+
+4. **HackerNews Parser** extracts metadata, publishes to `messages.30.type.hn.10.parsed`:
+   ```json
+   {
+     "id": "c7fb647b-e37f-42b1-9a21-b3be2ab031e8",
+     "type": "hackernews",
+     "parsed": {
+       "item_id": "46620990",
+       "url": "https://news.ycombinator.com/item?id=46620990",
+       "title": "Ask HN: How do you safely give LLMs SSHDB access",
+       "hn_links": [
+         { "url": "https://news.ycombinator.com/item?id=46620990", "item_id": "46620990" }
+       ]
+     }
+   }
+   ```
+
+5. **HackerNews Writer** persists to `/tmp/nats/messages.30.type.hn.10.parsed/1.json`
+
+### Example 2: Training Note Processing
 
 1. **Publisher** reads `sample/training/sample1.json`:
    ```json
@@ -242,14 +395,11 @@ python nats_router.py
    }
    ```
 
-2. **Router** detects it as training (via `TrainingParser.can_parse()`), publishes to `messages.20.type.training`
+2. **Router** detects training, publishes to `messages.20.type.training`
 
-3. **Training Listener** parses the text with ANTLR4:
-   - Extracts date, exercises, sets, reps, weights
-   - Creates structured workout object
-   - Publishes to `messages.30.type.training.10.parsed`
+3. **Training Parser** parses with ANTLR4, extracts exercises, publishes to `messages.30.type.training.10.parsed`
 
-4. **Writer** writes to `/tmp/training/0.json`:
+4. **Writer** persists to `/tmp/nats/messages.30.type.training.10.parsed/1.json`:
    ```json
    {
      "workout_id": "w_<date>_000000",
@@ -338,12 +488,25 @@ To add processing after training listener (e.g., database storage, API calls):
 4. **Type Detection First**: Router uses `can_parse()` to detect types (no assumptions about message content)
 5. **Separate Concerns**: Each step in the pipeline is a separate process (easier to develop, test, monitor)
 
-## Future Enhancements
+## Implementation Status
 
-- [ ] Add persistence layer (database) instead of just file writes
-- [ ] Add message acknowledgments and retry logic
-- [ ] Add metrics/monitoring (message counts, latency)
-- [ ] Add dead-letter queue for failed messages
-- [ ] Support other note types (toggl, next, hn) with dedicated listeners
-- [ ] Add API endpoint to query parsed sessions
-- [ ] Add web UI to visualize pipeline
+### Completed
+- [x] Two-stage routing architecture (messages.10.raw.type.* → messages.20.*)
+- [x] HackerNews detection and parsing
+- [x] Generic NATS writer for any topic
+- [x] Simplified file naming: `/tmp/nats/$TOPIC/$N.json`
+- [x] Apple Notes publisher with routing
+- [x] HackerNews item ID extraction and link detection
+
+### In Progress
+- [ ] Training parser (ANTLR4-based)
+- [ ] Time entry (Toggl) parser
+- [ ] Next task parser
+
+### Planned
+- [ ] Message acknowledgments and retry logic
+- [ ] Metrics/monitoring (message counts, latency)
+- [ ] Dead-letter queue for failed messages
+- [ ] Database persistence layer instead of file writes
+- [ ] API endpoint to query parsed sessions
+- [ ] Web UI to visualize pipeline
