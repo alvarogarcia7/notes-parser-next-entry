@@ -1,3 +1,0 @@
-[console_scripts]
-nats-time-listener = nats_time_listener:main_sync
-nats-time-writer = nats_writer:main_sync

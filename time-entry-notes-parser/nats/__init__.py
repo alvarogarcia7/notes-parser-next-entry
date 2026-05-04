@@ -1,1 +1,0 @@
-"""Time Entry NATS Components"""
