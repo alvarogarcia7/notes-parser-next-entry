@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NATS Time Entry Writer
-Subscribes to parsed time entry messages and writes them to disk
+Subscribes to messages.30.type.time.10.parsed and writes to disk
 """
 
 import asyncio
@@ -17,9 +17,11 @@ NATS_URL = os.environ.get("NATS_URL")
 if not NATS_URL:
     print("Error: NATS_URL environment variable not set")
     sys.exit(1)
+
 CERTS_DIR = os.environ.get("CERTS_DIR", "/tmp/nats-certs")
 INPUT_TOPIC = "messages.30.type.time.10.parsed"
-OUTPUT_DIR = "/tmp/time-entries"
+OUTPUT_DIR = Path("/tmp/nats") / INPUT_TOPIC
+MESSAGE_COUNTER_FILE = OUTPUT_DIR / ".counter"
 
 
 def _make_ssl_ctx() -> ssl.SSLContext:
@@ -31,6 +33,22 @@ def _make_ssl_ctx() -> ssl.SSLContext:
         keyfile=f"{CERTS_DIR}/client.key"
     )
     return ctx
+
+
+def _get_next_message_number() -> int:
+    """Get the next message number from counter file."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        if MESSAGE_COUNTER_FILE.exists():
+            count = int(MESSAGE_COUNTER_FILE.read_text().strip())
+        else:
+            count = 0
+        count += 1
+        MESSAGE_COUNTER_FILE.write_text(str(count))
+        return count
+    except Exception as e:
+        print(f"Warning: Could not read counter file: {e}")
+        return 1
 
 
 async def _connect_with_retry(url: str) -> nats.aio.client.Client:
@@ -51,30 +69,31 @@ async def _connect_with_retry(url: str) -> nats.aio.client.Client:
 
 async def main() -> None:
     """Subscribe to messages.30.type.time.10.parsed and write to disk."""
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
     nc = await _connect_with_retry(NATS_URL)
 
     try:
-        counter = 0
-        print(f"✍️  Writer started, listening on '{INPUT_TOPIC}'...")
-        print(f"💾 Writing to: {OUTPUT_DIR}")
+        print(f"⏱️  Time Entry Writer started")
+        print(f"  Input topic:  {INPUT_TOPIC}")
+        print(f"  Output dir:   {OUTPUT_DIR}")
 
         async def handler(msg):
-            nonlocal counter
             try:
                 envelope = json.loads(msg.data.decode())
+                msg_num = _get_next_message_number()
+                filename = f"{msg_num}.json"
+                filepath = OUTPUT_DIR / filename
+
+                with open(filepath, 'w') as f:
+                    json.dump(envelope, f, indent=2)
+
                 result = envelope.get("result", {})
-                source_note_id = envelope.get("source_note_id", "unknown")
-
-                output_file = Path(OUTPUT_DIR) / f"{counter}.json"
-                with open(output_file, 'w') as f:
-                    json.dump(result, f, indent=2)
-
                 date_str = result.get("date", "unknown")
                 entries_count = len(result.get("time_entries", []))
-                print(f"✓ Wrote {output_file.name} ({entries_count} entries, date: {date_str}, note_id: {source_note_id})")
-                counter += 1
+                print(f"✓ Saved message #{msg_num} - {entries_count} entries ({date_str})")
+                print(f"  File: {filepath}")
 
+            except json.JSONDecodeError as e:
+                print(f"✗ Failed to decode message: {e}")
             except Exception as e:
                 print(f"✗ Error writing message: {e}")
 
